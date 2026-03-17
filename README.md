@@ -91,8 +91,8 @@ Good coverage for retro games. First provider checked in the cascade.
    ```bash
    sgm config set screenscraper_devid YOUR_DEVID
    sgm config set screenscraper_devpassword YOUR_DEVPASS
-   sgm config set screenscraper_username YOUR_USERNAME
-   sgm config set screenscraper_password YOUR_PASSWORD
+   sgm config set screenscraper_ssid YOUR_USERNAME
+   sgm config set screenscraper_sspassword YOUR_PASSWORD
    ```
 
 ### TheGamesDB (optional)
@@ -101,7 +101,7 @@ Community-driven database with good metadata.
 
 1. Go to [thegamesdb.net](https://thegamesdb.net/)
 2. Request a free API key
-3. Set it: `sgm config set thegamesdb_api_key YOUR_KEY_HERE`
+3. Set it: `sgm config set thegamesdb_apikey YOUR_KEY_HERE`
 
 ### Cascade Order
 
@@ -334,9 +334,9 @@ Config file: `~/.config/sgm/config.json`
 | `log_level` | `info` | Log verbosity (debug, info, warning, error) |
 | `screenscraper_devid` | *(empty)* | ScreenScraper developer ID |
 | `screenscraper_devpassword` | *(empty)* | ScreenScraper developer password |
-| `screenscraper_username` | *(empty)* | ScreenScraper username |
-| `screenscraper_password` | *(empty)* | ScreenScraper password |
-| `thegamesdb_api_key` | *(empty)* | TheGamesDB API key |
+| `screenscraper_ssid` | *(empty)* | ScreenScraper username (ssid) |
+| `screenscraper_sspassword` | *(empty)* | ScreenScraper password |
+| `thegamesdb_apikey` | *(empty)* | TheGamesDB API key |
 
 Don't share your config file - it contains your API keys.
 
