@@ -201,6 +201,50 @@ def get_grid_stats(grid_path: Path) -> dict:
     return stats
 
 
+
+def is_steam_running() -> bool:
+    """Check whether the Steam client is currently running.
+
+    Returns:
+        True if a Steam process is found, False otherwise.
+    """
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["pgrep", "-x", "steam"],
+            capture_output=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except Exception as e:
+        logger.debug(f"is_steam_running check failed: {e}")
+        return False
+
+
+def reload_steam_shortcuts() -> bool:
+    """Ask a running Steam client to reload its non-Steam shortcuts.
+
+    Uses the ``steam://reload/shortcuts`` URL protocol, which causes Steam
+    to re-read shortcuts.vdf from disk without requiring a full restart.
+    Runs non-blocking (fire-and-forget).
+
+    Returns:
+        True if the reload command was sent successfully, False on error.
+    """
+    import subprocess
+    try:
+        subprocess.Popen(
+            ["steam", "steam://reload/shortcuts"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        logger.info("Sent steam://reload/shortcuts to running Steam client")
+        return True
+    except Exception as e:
+        logger.warning(f"Could not send reload signal to Steam: {e}")
+        return False
+
+
 def format_size(size_bytes: int) -> str:
     """Format byte count as human-readable string."""
     if size_bytes < 1024:
