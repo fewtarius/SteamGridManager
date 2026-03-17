@@ -518,6 +518,10 @@ def update_steam_collections(steam_path: Path,
     """Add shortcuts to Steam library collections in localconfig.vdf.
 
     Steam ROM Manager uses collection IDs of the form ``srm-<base64(name)>``.
+    Steam uses cloud storage (``cloud-storage-namespace-1.json``) as the
+    authoritative collection source — ``localconfig.vdf`` is a secondary cache.
+    Both files must be updated for collections to appear after Steam starts.
+
     Each collection entry in ``user-collections`` has the shape::
 
         {
@@ -547,6 +551,79 @@ def update_steam_collections(steam_path: Path,
     except FileNotFoundError as e:
         logger.warning(f"Could not find localconfig.vdf: {e}")
         return False
+
+    # --- Cloud storage update (authoritative source) ---
+    cloud_path = vdf_path.parent / "cloudstorage" / "cloud-storage-namespace-1.json"
+    cloud_modified_path = vdf_path.parent / "cloudstorage" / "cloud-storage-namespace-1.modified.json"
+    if cloud_path.exists():
+        try:
+            import time as _time
+            cloud_data: list = json.load(cloud_path.open(encoding="utf-8"))
+
+            # Build a lookup: key -> index in cloud_data list
+            cloud_index: dict[str, int] = {}
+            for i, item in enumerate(cloud_data):
+                if isinstance(item, list) and len(item) >= 2 and isinstance(item[1], dict):
+                    cloud_index[item[1].get("key", "")] = i
+
+            # Get the highest version number currently in the file
+            max_version = 1
+            for item in cloud_data:
+                if isinstance(item, list) and len(item) >= 2:
+                    v = item[1].get("version", "0")
+                    try:
+                        max_version = max(max_version, int(str(v)))
+                    except (ValueError, TypeError):
+                        pass
+            next_version = max_version + 1
+
+            timestamp_ms = int(_time.time() * 1000)
+
+            for category, app_ids in shortcuts_by_category.items():
+                if not app_ids:
+                    continue
+
+                b64 = base64.b64encode(category.encode("utf-8")).decode().rstrip("=")
+                coll_id = f"srm-{b64}"
+                cloud_key = f"user-collections.{coll_id}"
+
+                value_obj = {
+                    "id": coll_id,
+                    "added": list(app_ids),
+                    "removed": [],
+                }
+                new_entry = {
+                    "key": cloud_key,
+                    "timestamp": timestamp_ms,
+                    "value": json.dumps(value_obj, separators=(",", ":")),
+                    "version": str(next_version),
+                    "conflictResolutionMethod": "custom",
+                    "strMethodId": "union-collections",
+                }
+                if cloud_key in cloud_index:
+                    # Replace existing entry (may be is_deleted=True)
+                    cloud_data[cloud_index[cloud_key]] = [cloud_key, new_entry]
+                else:
+                    cloud_data.append([cloud_key, new_entry])
+                    cloud_index[cloud_key] = len(cloud_data) - 1
+
+                next_version += 1
+
+            # Write back cloud storage files
+            import tempfile as _tempfile, os as _os
+            tmp_cloud = cloud_path.with_suffix(".json.sgm_tmp")
+            with tmp_cloud.open("w", encoding="utf-8") as f:
+                json.dump(cloud_data, f, separators=(",", ":"))
+            _os.replace(tmp_cloud, cloud_path)
+
+            # Clear the modified file (pending changes) — we've written the full state
+            cloud_modified_path.write_text("[]", encoding="utf-8")
+
+            logger.info(f"Updated cloud-storage-namespace-1.json with Steam collections")
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning(f"Failed to update cloud storage collections: {e}")
+    else:
+        logger.debug(f"Cloud storage not found at {cloud_path}, skipping")
 
     try:
         content = vdf_path.read_text(encoding="utf-8")

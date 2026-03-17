@@ -562,7 +562,14 @@ def cmd_rom(args: argparse.Namespace) -> int:
         print(f"\nAdding {len(new_shortcuts)} shortcuts to Steam...")
         shortcuts_only = [sc for sc, _, _, _ in new_shortcuts]
         added, skipped = add_shortcuts(steam_path, shortcuts_only,
-                                       user_id if user_id != 'auto' else None)
+                                      user_id if user_id != 'auto' else None)
+        # Always update launch_options for existing shortcuts (fixes wrong core paths)
+        if skipped > 0:
+            updated, _ = add_shortcuts(steam_path, shortcuts_only,
+                                       user_id if user_id != 'auto' else None,
+                                       replace_existing=True)
+            if updated > 0:
+                print(f"  Updated launch options for {updated} shortcuts")
         print(f"  Added: {added}, Already existed: {skipped}")
 
         # Update Steam library collections in localconfig.vdf
