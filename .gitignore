@@ -1,0 +1,37 @@
+# CLIO internals (keep instructions.md committed)
+.clio/*
+!.clio/instructions.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Legacy/development files
+sources.py
+recover.py
+
+# Session handoff files (never commit)
+ai-assisted/
+
+# Scratch workspace
+scratch/
+reference/

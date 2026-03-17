@@ -1,0 +1,2 @@
+# SGM has no Python package dependencies
+# It uses curl for HTTP requests (available on SteamOS by default)
