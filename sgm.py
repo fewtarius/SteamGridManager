@@ -32,6 +32,18 @@ def setup_logging(level: str = 'info', log_file: str = None) -> None:
     )
 
 
+def notify_steam_reload() -> None:
+    """Tell a running Steam client to reload shortcuts, or print a hint if not running."""
+    from steam import is_steam_running, reload_steam_shortcuts
+    if is_steam_running():
+        if reload_steam_shortcuts():
+            print("\nSteam is running — shortcuts reloaded. Your games should appear shortly.\n")
+        else:
+            print("\nDone! Restart Steam to see your games in the library.\n")
+    else:
+        print("\nDone! Start Steam to see your games in the library.\n")
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     """Show current status of grid images and backups."""
     from config import config_exists, load_config, get_resolved_config
@@ -204,12 +216,15 @@ def cmd_restore(args: argparse.Namespace) -> int:
         print(f"Error: {e}")
         return 1
     
-    return restore_backup(
-        grid_path, backup_path, 
-        timestamp=args.timestamp, 
+    result = restore_backup(
+        grid_path, backup_path,
+        timestamp=args.timestamp,
         dry_run=args.dry_run,
         force=args.force,
     )
+    if result == 0 and not args.dry_run:
+        notify_steam_reload()
+    return result
 
 
 def cmd_refresh(args: argparse.Namespace) -> int:
@@ -566,10 +581,8 @@ def cmd_rom(args: argparse.Namespace) -> int:
             print("\n  Skipping artwork (no API key configured)")
             print("  Run 'sgm config set api_key YOUR_KEY' to enable artwork downloads")
 
-        print(f"\nDone! Restart Steam to see new games in your library.\n")
+        notify_steam_reload()
         return 0
-
-    # ── sgm rom systems ──────────────────────────────────────────
     elif sub == 'systems':
         print(f"\n Supported Systems\n")
         systems = list_supported_systems()
