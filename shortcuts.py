@@ -483,3 +483,149 @@ def add_shortcuts(steam_path: Path, new_shortcuts: List[SteamShortcut],
     write_shortcuts_vdf(vdf_path, existing)
     logger.info(f"Added {added} shortcuts, skipped {skipped} existing")
     return added, skipped
+
+
+def find_localconfig_vdf(steam_path: Path, user_id: Optional[str] = None) -> Path:
+    """Find the localconfig.vdf for a Steam user.
+
+    Args:
+        steam_path: Steam installation path.
+        user_id: Specific Steam user ID, or None to auto-detect.
+
+    Returns:
+        Path to localconfig.vdf.
+
+    Raises:
+        FileNotFoundError: If not found.
+    """
+    userdata = steam_path / "userdata"
+    if user_id:
+        candidates = [userdata / user_id]
+    else:
+        candidates = sorted(userdata.iterdir()) if userdata.exists() else []
+
+    for user_dir in candidates:
+        vdf = user_dir / "config" / "localconfig.vdf"
+        if vdf.exists():
+            return vdf
+
+    raise FileNotFoundError("localconfig.vdf not found in Steam userdata")
+
+
+def update_steam_collections(steam_path: Path,
+                              shortcuts_by_category: Dict[str, List[int]],
+                              user_id: Optional[str] = None) -> bool:
+    """Add shortcuts to Steam library collections in localconfig.vdf.
+
+    Steam ROM Manager uses collection IDs of the form ``srm-<base64(name)>``.
+    Each collection entry in ``user-collections`` has the shape::
+
+        {
+            "id": "srm-<base64>",
+            "added": [<appid>, ...],
+            "removed": []
+        }
+
+    The collection name IS the base64-decoded ID suffix — Steam derives the
+    display name from it at runtime.
+
+    Args:
+        steam_path: Steam installation path.
+        shortcuts_by_category: Mapping of category name -> list of short app IDs
+            (the 32-bit IDs, not the full 64-bit ones).
+        user_id: Specific Steam user ID, or None to auto-detect.
+
+    Returns:
+        True on success, False on failure.
+    """
+    import base64
+    import json
+    import re
+
+    try:
+        vdf_path = find_localconfig_vdf(steam_path, user_id)
+    except FileNotFoundError as e:
+        logger.warning(f"Could not find localconfig.vdf: {e}")
+        return False
+
+    try:
+        content = vdf_path.read_text(encoding="utf-8")
+    except OSError as e:
+        logger.error(f"Failed to read localconfig.vdf: {e}")
+        return False
+
+    # Extract the user-collections JSON value (it's a JSON string escaped inside VDF)
+    pattern = re.compile(r'("user-collections"\t+)"(.*?)"(\s*\n)', re.DOTALL)
+    match = pattern.search(content)
+
+    if match:
+        raw_json = match.group(2).replace('\\"', '"')
+        try:
+            collections: dict = json.loads(raw_json)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse user-collections JSON: {e}")
+            return False
+    else:
+        # No user-collections key yet — we'll create it
+        collections = {}
+
+    changed = False
+    for category, app_ids in shortcuts_by_category.items():
+        if not app_ids:
+            continue
+
+        b64 = base64.b64encode(category.encode("utf-8")).decode().rstrip("=")
+        coll_id = f"srm-{b64}"
+
+        if coll_id not in collections:
+            collections[coll_id] = {"id": coll_id, "added": [], "removed": []}
+            logger.info(f"Creating Steam collection: {category!r} ({coll_id})")
+            changed = True
+
+        existing_added: list = collections[coll_id]["added"]
+        new_ids = [aid for aid in app_ids if aid not in existing_added]
+        if new_ids:
+            existing_added.extend(new_ids)
+            logger.info(f"Added {len(new_ids)} app IDs to collection {category!r}")
+            changed = True
+
+    if not changed:
+        logger.debug("No collection changes needed")
+        return True
+
+    # Serialise back — escape quotes for VDF embedding
+    new_json = json.dumps(collections, separators=(",", ":")).replace('"', '\\"')
+
+    if match:
+        new_content = (
+            content[: match.start()]
+            + match.group(1)
+            + f'"{new_json}"'
+            + match.group(3)
+            + content[match.end():]
+        )
+    else:
+        # Append before the closing braces of the appropriate section.
+        # Simplest safe approach: insert before the last occurrence of closing
+        # section markers (two closing braces at the end of the Software block).
+        insert_line = f'\t\t"user-collections"\t\t"{new_json}"\n'
+        # Find a sensible insertion point — after "user-roaming-config-store"
+        insert_match = re.search(r'("user-roaming-config-store".*?\n)', content, re.DOTALL)
+        if insert_match:
+            pos = insert_match.end()
+            new_content = content[:pos] + insert_line + content[pos:]
+        else:
+            # Fallback: append before the last closing brace block
+            new_content = content.rstrip() + "\n" + insert_line
+
+    try:
+        # Write atomically via temp file
+        import tempfile, os
+        tmp = vdf_path.with_suffix(".vdf.sgm_tmp")
+        tmp.write_text(new_content, encoding="utf-8")
+        os.replace(tmp, vdf_path)
+        logger.info(f"Updated localconfig.vdf with Steam collections")
+        return True
+    except OSError as e:
+        logger.error(f"Failed to write localconfig.vdf: {e}")
+        return False

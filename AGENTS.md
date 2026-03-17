@@ -450,9 +450,9 @@ sgm_export_20260316_154500/
 |-----|------|---------|-------------|
 | `screenscraper_devid` | string | "" | ScreenScraper developer ID |
 | `screenscraper_devpassword` | string | "" | ScreenScraper developer password |
-| `screenscraper_username` | string | "" | ScreenScraper username |
-| `screenscraper_password` | string | "" | ScreenScraper password |
-| `thegamesdb_api_key` | string | "" | TheGamesDB API key |
+| `screenscraper_ssid` | string | "" | ScreenScraper username (ssid) |
+| `screenscraper_sspassword` | string | "" | ScreenScraper password |
+| `thegamesdb_apikey` | string | "" | TheGamesDB API key |
 
 ---
 

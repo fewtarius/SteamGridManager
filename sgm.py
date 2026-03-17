@@ -314,6 +314,112 @@ def cmd_monitor(args: argparse.Namespace) -> int:
         return monitor_status()
 
 
+def cmd_rom_art(args: argparse.Namespace) -> int:
+    """Handle `sgm rom art` subcommands."""
+    art_action = getattr(args, 'rom_art_action', None)
+
+    if art_action == 'clear':
+        from config import config_exists, get_resolved_config
+        from steam import find_steam_path, find_grid_path
+        from rom_scanner import scan_rom_folder, scan_all_systems
+        from systems import get_system
+        from shortcuts import generate_shortcut_id, generate_short_app_id
+
+        try:
+            if config_exists():
+                config = get_resolved_config()
+                steam_path = Path(config['steam_path'])
+                user_id = config.get('steam_user_id', 'auto')
+            else:
+                steam_path = find_steam_path()
+                user_id = 'auto'
+        except FileNotFoundError as e:
+            print(f"Error: {e}")
+            return 1
+
+        try:
+            grid_path = find_grid_path(steam_path, user_id if user_id != 'auto' else None)
+        except FileNotFoundError as e:
+            print(f"Error: {e}")
+            return 1
+
+        rom_path = Path(args.path)
+        if not rom_path.exists():
+            print(f"Error: ROM path not found: {rom_path}")
+            return 1
+
+        # Scan ROMs to find short IDs
+        if args.system:
+            sys_def = get_system(args.system)
+            if not sys_def:
+                print(f"Error: Unknown system '{args.system}'")
+                return 1
+            roms = scan_rom_folder(args.system, rom_path / args.system, sys_def)
+            all_roms = {args.system: roms} if roms else {}
+        else:
+            all_roms = scan_all_systems(rom_path)
+
+        if not all_roms:
+            print("No ROMs found.")
+            return 0
+
+        title_filter = (args.game or "").lower()
+
+        _art_suffixes = (".png", ".jpg", "p.png", "p.jpg",
+                         "_hero.png", "_hero.jpg",
+                         "_logo.png", "_logo.jpg",
+                         "_icon.png", "_icon.jpg")
+
+        to_delete: list[Path] = []
+
+        for system, roms in sorted(all_roms.items()):
+            sys_def = get_system(system)
+            if not sys_def:
+                continue
+            for rom in roms:
+                if title_filter and title_filter not in rom.steam_title.lower():
+                    continue
+
+                exe = sys_def.emulator.get_executable()
+                launch_opts = sys_def.emulator.get_launch_options(str(rom.path))
+                if not exe.startswith('"'):
+                    exe = f'"{exe}"'
+
+                short_id = generate_short_app_id(exe, rom.steam_title)
+
+                for suffix in _art_suffixes:
+                    img = grid_path / f"{short_id}{suffix}"
+                    if img.exists() or img.is_symlink():
+                        to_delete.append(img)
+
+        if not to_delete:
+            print("No art files found to remove.")
+            return 0
+
+        print(f"\n{'[DRY RUN] Would remove' if args.dry_run else 'Removing'} "
+              f"{len(to_delete)} art file(s):\n")
+
+        removed = 0
+        for img in sorted(to_delete):
+            print(f"  {img.name}")
+            if not args.dry_run:
+                try:
+                    img.unlink()
+                    removed += 1
+                except OSError as e:
+                    print(f"    Error: {e}")
+
+        if args.dry_run:
+            print(f"\n(dry run — nothing deleted)\n")
+        else:
+            print(f"\nRemoved {removed} file(s).\n")
+
+        return 0
+
+    print("Usage: sgm rom art <clear> [options]")
+    return 1
+
+
 def cmd_rom(args: argparse.Namespace) -> int:
     """ROM management commands."""
     from config import config_exists, get_resolved_config
@@ -324,6 +430,7 @@ def cmd_rom(args: argparse.Namespace) -> int:
         generate_short_app_id, generate_shortcut_id,
         SteamShortcut, get_existing_shortcuts, add_shortcuts,
     )
+    from shortcuts import update_steam_collections
     from art_scraper import ART_TYPES, CascadeScraper, save_grid_images
 
     sub = args.rom_action
@@ -458,40 +565,33 @@ def cmd_rom(args: argparse.Namespace) -> int:
                                        user_id if user_id != 'auto' else None)
         print(f"  Added: {added}, Already existed: {skipped}")
 
+        # Update Steam library collections in localconfig.vdf
+        categories_to_ids: dict[str, list[int]] = {}
+        for sc, rom, sys_def, short_id in new_shortcuts:
+            cat = sys_def.get_steam_category()
+            categories_to_ids.setdefault(cat, []).append(int(short_id))
+        uid = user_id if user_id != 'auto' else None
+        update_steam_collections(steam_path, categories_to_ids, uid)
+
         # Fetch artwork if we have API keys
         if not args.no_art and config.get('api_key'):
             # Filter to only games missing art when --missing-art is set
             art_targets = new_shortcuts
             if getattr(args, 'missing_art', False):
-                # Build a set of short_ids that already have at least one grid image.
-                # We derive these from the *existing* shortcuts.vdf (source of truth)
-                # rather than recomputing IDs, because the exe string used for hashing
-                # includes launch options and varies from what we compute pre-import.
-                from shortcuts import read_shortcuts_vdf, find_shortcuts_vdf
-                existing_with_art: set = set()
-                try:
-                    vdf_path = find_shortcuts_vdf(steam_path,
-                                                  user_id if user_id != 'auto' else None)
-                    existing_sc = read_shortcuts_vdf(vdf_path)
-                    for sc_entry in existing_sc:
-                        if sc_entry.appid is None:
-                            continue
-                        sid = str((sc_entry.appid & 0xFFFFFFFF) | 0x02000000)
-                        if any(
-                            (grid_path / f"{sid}{suffix}").exists()
-                            for suffix in (".png", ".jpg", "p.png", "p.jpg",
-                                           "_hero.png", "_hero.jpg",
-                                           "_logo.png", "_logo.jpg",
-                                           "_icon.png", "_icon.jpg")
-                        ):
-                            existing_with_art.add(sc_entry.appname)
-                except Exception as e:
-                    logger.warning(f"Could not read shortcuts.vdf for --missing-art check: {e}")
-
+                # Check each game's short_id directly against the grid folder.
+                # Checking by name was unreliable when multiple shortcuts share
+                # the same title (e.g. two "Druid" entries with different IDs).
+                _art_suffixes = (
+                    ".png", ".jpg", "p.png", "p.jpg",
+                    "_hero.png", "_hero.jpg",
+                    "_logo.png", "_logo.jpg",
+                    "_icon.png", "_icon.jpg",
+                )
                 art_targets = [
                     (sc, rom, sys_def, sid)
                     for sc, rom, sys_def, sid in new_shortcuts
-                    if rom.steam_title not in existing_with_art
+                    if not any((grid_path / f"{sid}{suffix}").exists()
+                               for suffix in _art_suffixes)
                 ]
                 skipped_art = len(new_shortcuts) - len(art_targets)
                 print(f"\n{skipped_art} games already have art, "
@@ -591,6 +691,8 @@ def cmd_rom(args: argparse.Namespace) -> int:
             print(f"  {name:<16} {sys_def.fullname:<30} [{sys_def.manufacturer}]")
         print(f"\n  Total: {len(systems)} systems\n")
         return 0
+    elif sub == 'art':
+        return cmd_rom_art(args)
 
     return 0
 
@@ -803,6 +905,16 @@ def main() -> int:
     rom_import.add_argument('--dry-run', action='store_true', help='Show what would be imported')
 
     rom_sub.add_parser('systems', help='List supported systems')
+
+    rom_art = rom_sub.add_parser('art', help='Manage ROM artwork')
+    rom_art_sub = rom_art.add_subparsers(dest='rom_art_action')
+    rom_art_clear = rom_art_sub.add_parser('clear', help='Remove grid art for ROM games')
+    rom_art_clear.add_argument('path', help='Path to ROM root directory')
+    rom_art_clear.add_argument('--system', '-s', help='Only clear art for this system')
+    rom_art_clear.add_argument('--game', '-g', help='Only clear art for games matching this title')
+    rom_art_clear.add_argument('--dry-run', action='store_true',
+                               help='Show what would be removed without deleting')
+
     sub_rom.set_defaults(func=cmd_rom)
 
     # export

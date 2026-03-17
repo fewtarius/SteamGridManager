@@ -684,7 +684,7 @@ class CascadeScraper:
 
         Config keys:
             screenscraper_devid, screenscraper_devpassword,
-            screenscraper_username, screenscraper_password,
+            screenscraper_ssid, screenscraper_sspassword,
             thegamesdb_api_key,
             steamgriddb_api_key (or api_key)
         """
@@ -701,13 +701,13 @@ class CascadeScraper:
             self.providers.append(ScreenScraperProvider(
                 devid=ss_devid,
                 devpassword=ss_devpass,
-                username=config.get("screenscraper_username", ""),
-                password=config.get("screenscraper_password", ""),
+                username=config.get("screenscraper_ssid", ""),
+                password=config.get("screenscraper_sspassword", ""),
             ))
             logger.info("ScreenScraper provider enabled")
 
         # TheGamesDB (second priority)
-        tgdb_key = config.get("thegamesdb_api_key", "")
+        tgdb_key = config.get("thegamesdb_apikey", config.get("thegamesdb_api_key", ""))
         if tgdb_key:
             self.providers.append(TheGamesDBProvider(api_key=tgdb_key))
             logger.info("TheGamesDB provider enabled")
@@ -863,9 +863,11 @@ def save_grid_images(short_app_id: str, artwork: Dict[str, ArtResult],
         Dict mapping art_type to saved file path.
     """
     # Steam grid filename patterns
+    # Wide capsule = {id}.png (920x430, horizontal)
+    # Tall capsule = {id}p.png (600x900, vertical/portrait)
     name_map = {
-        "tall": f"{short_app_id}",           # {id}.png
-        "wide": f"{short_app_id}p",          # {id}p.png
+        "wide": f"{short_app_id}",           # {id}.png  — horizontal banner
+        "tall": f"{short_app_id}p",          # {id}p.png — vertical boxart
         "hero": f"{short_app_id}_hero",      # {id}_hero.png
         "logo": f"{short_app_id}_logo",      # {id}_logo.png
         "icon": f"{short_app_id}_icon",      # {id}_icon.png

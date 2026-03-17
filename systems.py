@@ -126,7 +126,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("fceumm"),
         screenscraper_id=3,
         thegamesdb_id="7",
-        steam_category="NES",
     ),
     "snes": SystemDef(
         name="snes",
@@ -136,7 +135,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("snes9x"),
         screenscraper_id=4,
         thegamesdb_id="6",
-        steam_category="SNES",
     ),
     "n64": SystemDef(
         name="n64",
@@ -146,7 +144,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("mupen64plus_next"),
         screenscraper_id=14,
         thegamesdb_id="3",
-        steam_category="N64",
     ),
     "gb": SystemDef(
         name="gb",
@@ -156,7 +153,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("mgba"),
         screenscraper_id=9,
         thegamesdb_id="4",
-        steam_category="Game Boy",
     ),
     "gbc": SystemDef(
         name="gbc",
@@ -166,7 +162,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("mgba"),
         screenscraper_id=10,
         thegamesdb_id="41",
-        steam_category="Game Boy Color",
     ),
     "gba": SystemDef(
         name="gba",
@@ -176,7 +171,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("mgba"),
         screenscraper_id=12,
         thegamesdb_id="5",
-        steam_category="GBA",
     ),
     "nds": SystemDef(
         name="nds",
@@ -186,7 +180,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("melondsds"),
         screenscraper_id=15,
         thegamesdb_id="8",
-        steam_category="Nintendo DS",
     ),
     "gamecube": SystemDef(
         name="gamecube",
@@ -199,7 +192,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         ),
         screenscraper_id=13,
         thegamesdb_id="2",
-        steam_category="GameCube",
     ),
     "wii": SystemDef(
         name="wii",
@@ -212,7 +204,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         ),
         screenscraper_id=16,
         thegamesdb_id="9",
-        steam_category="Wii",
     ),
     "wiiu": SystemDef(
         name="wiiu",
@@ -225,7 +216,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         ),
         screenscraper_id=18,
         thegamesdb_id="38",
-        steam_category="Wii U",
     ),
 
     # ─── Sega ───────────────────────────────────────────────────────
@@ -237,7 +227,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("genesis_plus_gx"),
         screenscraper_id=1,
         thegamesdb_id="18",
-        steam_category="Genesis",
     ),
     "mastersystem": SystemDef(
         name="mastersystem",
@@ -247,7 +236,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("genesis_plus_gx"),
         screenscraper_id=2,
         thegamesdb_id="35",
-        steam_category="Master System",
     ),
     "gamegear": SystemDef(
         name="gamegear",
@@ -257,7 +245,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("genesis_plus_gx"),
         screenscraper_id=21,
         thegamesdb_id="20",
-        steam_category="Game Gear",
     ),
     "dreamcast": SystemDef(
         name="dreamcast",
@@ -267,7 +254,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("flycast"),
         screenscraper_id=23,
         thegamesdb_id="16",
-        steam_category="Dreamcast",
     ),
     "saturn": SystemDef(
         name="saturn",
@@ -277,7 +263,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("mednafen_saturn"),
         screenscraper_id=22,
         thegamesdb_id="17",
-        steam_category="Saturn",
     ),
 
     # ─── Sony ───────────────────────────────────────────────────────
@@ -290,7 +275,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("mednafen_psx_hw"),
         screenscraper_id=57,
         thegamesdb_id="10",
-        steam_category="PlayStation",
     ),
     "ps2": SystemDef(
         name="ps2",
@@ -304,7 +288,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         ),
         screenscraper_id=58,
         thegamesdb_id="11",
-        steam_category="PS2",
     ),
     "psp": SystemDef(
         name="psp",
@@ -317,7 +300,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         ),
         screenscraper_id=61,
         thegamesdb_id="13",
-        steam_category="PSP",
     ),
 
     # ─── Atari ──────────────────────────────────────────────────────
@@ -329,7 +311,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("stella"),
         screenscraper_id=26,
         thegamesdb_id="22",
-        steam_category="Atari 2600",
     ),
     "atari5200": SystemDef(
         name="atari5200",
@@ -340,7 +321,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("atari800"),
         screenscraper_id=40,
         thegamesdb_id="26",
-        steam_category="Atari 5200",
     ),
     "atari7800": SystemDef(
         name="atari7800",
@@ -350,7 +330,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("prosystem"),
         screenscraper_id=41,
         thegamesdb_id="27",
-        steam_category="Atari 7800",
     ),
     "atarilynx": SystemDef(
         name="atarilynx",
@@ -360,7 +339,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("mednafen_lynx"),
         screenscraper_id=28,
         thegamesdb_id="4924",
-        steam_category="Atari Lynx",
     ),
 
     # ─── Commodore ──────────────────────────────────────────────────
@@ -375,7 +353,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("vice_x64sc"),
         screenscraper_id=66,
         thegamesdb_id="40",
-        steam_category="C64",
     ),
     "vic20": SystemDef(
         name="vic20",
@@ -389,7 +366,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("vice_xvic"),
         screenscraper_id=73,
         thegamesdb_id=None,  # No VIC-20 on TheGamesDB
-        steam_category="VIC-20",
     ),
     "amiga": SystemDef(
         name="amiga",
@@ -400,7 +376,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("puae"),
         screenscraper_id=64,
         thegamesdb_id="4911",
-        steam_category="Amiga",
     ),
 
     # ─── Other ──────────────────────────────────────────────────────
@@ -412,7 +387,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("gearcoleco"),
         screenscraper_id=48,
         thegamesdb_id="31",
-        steam_category="ColecoVision",
     ),
     "intellivision": SystemDef(
         name="intellivision",
@@ -422,7 +396,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("freeintv"),
         screenscraper_id=115,
         thegamesdb_id="32",
-        steam_category="Intellivision",
     ),
     "neogeo": SystemDef(
         name="neogeo",
@@ -432,7 +405,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("fbneo"),
         screenscraper_id=142,
         thegamesdb_id="24",
-        steam_category="Neo Geo",
     ),
     "arcade": SystemDef(
         name="arcade",
@@ -442,7 +414,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("mame2003_plus"),
         screenscraper_id=75,
         thegamesdb_id=None,  # Arcade doesn't map cleanly
-        steam_category="Arcade",
     ),
 
     # ─── PC / Interactive Fiction ───────────────────────────────────
@@ -454,7 +425,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("dosbox_pure"),
         screenscraper_id=135,
         thegamesdb_id=None,
-        steam_category="DOS",
     ),
     "infocom": SystemDef(
         name="infocom",
@@ -464,7 +434,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("81"),  # No standard core; placeholder
         screenscraper_id=None,
         thegamesdb_id=None,
-        steam_category="Interactive Fiction",
     ),
     "zmachine": SystemDef(
         name="zmachine",
@@ -474,7 +443,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("81"),  # Placeholder
         screenscraper_id=None,
         thegamesdb_id=None,
-        steam_category="Interactive Fiction",
     ),
 
     # ─── Microsoft ──────────────────────────────────────────────────
@@ -491,7 +459,6 @@ SYSTEMS: Dict[str, SystemDef] = {
         ),
         screenscraper_id=32,
         thegamesdb_id="14",
-        steam_category="Xbox",
     ),
 }
 
