@@ -94,11 +94,13 @@ class SystemDef:
 
 def _ra(core: str) -> EmulatorConfig:
     """Shorthand for RetroArch Flatpak with a given core."""
+    import os
+    cores_dir = os.path.expanduser("~/.var/app/org.libretro.RetroArch/config/retroarch/cores")
     return EmulatorConfig(
         emulator="retroarch",
         core=core,
         flatpak_id="org.libretro.RetroArch",
-        launch_args=f'-L /app/share/libretro/cores/{core}_libretro.so "{{rom}}"'
+        launch_args=f'-L {cores_dir}/{core}_libretro.so "{{rom}}"'
     )
 
 
