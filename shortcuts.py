@@ -347,7 +347,11 @@ def write_shortcuts_vdf(path: Path, shortcuts: List[SteamShortcut]) -> None:
         shutil.copy2(path, backup)
         logger.info(f"Backed up existing shortcuts.vdf to {backup}")
 
-    path.write_bytes(bytes(buf))
+    # Write atomically via temp file (prevents truncation on failure)
+    import os as _os
+    tmp = path.with_suffix('.vdf.tmp')
+    tmp.write_bytes(bytes(buf))
+    _os.replace(tmp, path)
     logger.info(f"Wrote {len(shortcuts)} shortcuts to {path}")
 
 
@@ -425,7 +429,8 @@ def get_existing_shortcuts(steam_path: Path,
 
 def add_shortcuts(steam_path: Path, new_shortcuts: List[SteamShortcut],
                   user_id: Optional[str] = None,
-                  replace_existing: bool = False) -> Tuple[int, int]:
+                  replace_existing: bool = False,
+                  remove_by_tags: Optional[set] = None) -> Tuple[int, int]:
     """Add new shortcuts to shortcuts.vdf, preserving existing ones.
 
     Args:
@@ -433,11 +438,27 @@ def add_shortcuts(steam_path: Path, new_shortcuts: List[SteamShortcut],
         new_shortcuts: Shortcuts to add.
         user_id: Specific user ID, or None to auto-detect.
         replace_existing: If True, replace shortcuts with matching appid.
+        remove_by_tags: If provided, remove all existing shortcuts whose first
+            tag value matches any value in this set before adding new ones.
+            Use this to replace all SRM-managed shortcuts for a system.
 
     Returns:
         Tuple of (added_count, skipped_count).
     """
     existing = get_existing_shortcuts(steam_path, user_id)
+
+    # Remove all existing entries for managed systems (tag-based purge).
+    # This handles format migration (SRM format -> SGM format) where app IDs differ.
+    if remove_by_tags:
+        before = len(existing)
+        existing = [
+            sc for sc in existing
+            if not any(str(v) in remove_by_tags for v in sc.tags.values())
+        ]
+        removed = before - len(existing)
+        if removed:
+            logger.info(f"Removed {removed} existing shortcuts by tag: {remove_by_tags}")
+
     existing_ids = {sc.appid for sc in existing}
 
     added = 0
@@ -477,8 +498,10 @@ def add_shortcuts(steam_path: Path, new_shortcuts: List[SteamShortcut],
 
     # Skip writing if nothing changed — avoids truncation if killed mid-write
     if added == 0:
-        logger.info(f"No new shortcuts to add, skipping VDF write")
-        return added, skipped
+        if not remove_by_tags:
+            logger.info(f"No new shortcuts to add, skipping VDF write")
+            return added, skipped
+        # Even if nothing added, write if we removed entries by tag
 
     write_shortcuts_vdf(vdf_path, existing)
     logger.info(f"Added {added} shortcuts, skipped {skipped} existing")
@@ -515,36 +538,32 @@ def find_localconfig_vdf(steam_path: Path, user_id: Optional[str] = None) -> Pat
 def update_steam_collections(steam_path: Path,
                               shortcuts_by_category: Dict[str, List[int]],
                               user_id: Optional[str] = None) -> bool:
-    """Add shortcuts to Steam library collections in localconfig.vdf.
+    """Add shortcuts to Steam library collections in cloud storage.
 
-    Steam ROM Manager uses collection IDs of the form ``srm-<base64(name)>``.
-    Steam uses cloud storage (``cloud-storage-namespace-1.json``) as the
-    authoritative collection source — ``localconfig.vdf`` is a secondary cache.
-    Both files must be updated for collections to appear after Steam starts.
+    Creates native ``uc-*`` user collections (same format Steam uses natively),
+    replacing any old ``srm-*`` collections from Steam ROM Manager.
 
-    Each collection entry in ``user-collections`` has the shape::
-
-        {
-            "id": "srm-<base64>",
-            "added": [<appid>, ...],
-            "removed": []
-        }
-
-    The collection name IS the base64-decoded ID suffix — Steam derives the
-    display name from it at runtime.
+    ``cloud-storage-namespace-1.json`` is the authoritative collection source.
+    On import we:
+      1. Remove (mark deleted) all old ``srm-*`` entries.
+      2. Write new ``uc-*`` entries with the full game list.
+      3. Update ``localconfig.vdf`` user-collections cache for parity.
 
     Args:
         steam_path: Steam installation path.
-        shortcuts_by_category: Mapping of category name -> list of short app IDs
-            (the 32-bit IDs, not the full 64-bit ones).
+        shortcuts_by_category: Mapping of category name -> list of unsigned int32
+            short app IDs (generate_short_app_id(), NOT generate_shortcut_id()).
+            Steam's collection system stores unsigned 32-bit values.
         user_id: Specific Steam user ID, or None to auto-detect.
 
     Returns:
         True on success, False on failure.
     """
     import base64
+    import hashlib
     import json
     import re
+    import time as _time
 
     try:
         vdf_path = find_localconfig_vdf(steam_path, user_id)
@@ -552,125 +571,148 @@ def update_steam_collections(steam_path: Path,
         logger.warning(f"Could not find localconfig.vdf: {e}")
         return False
 
-    # --- Cloud storage update (authoritative source) ---
     cloud_path = vdf_path.parent / "cloudstorage" / "cloud-storage-namespace-1.json"
-    cloud_modified_path = vdf_path.parent / "cloudstorage" / "cloud-storage-namespace-1.modified.json"
-    if cloud_path.exists():
-        try:
-            import time as _time
-            cloud_data: list = json.load(cloud_path.open(encoding="utf-8"))
+    cloud_modified_path = (
+        vdf_path.parent / "cloudstorage" / "cloud-storage-namespace-1.modified.json"
+    )
 
-            # Build a lookup: key -> index in cloud_data list
-            cloud_index: dict[str, int] = {}
-            for i, item in enumerate(cloud_data):
-                if isinstance(item, list) and len(item) >= 2 and isinstance(item[1], dict):
-                    cloud_index[item[1].get("key", "")] = i
-
-            # Get the highest version number currently in the file
-            max_version = 1
-            for item in cloud_data:
-                if isinstance(item, list) and len(item) >= 2:
-                    v = item[1].get("version", "0")
-                    try:
-                        max_version = max(max_version, int(str(v)))
-                    except (ValueError, TypeError):
-                        pass
-            next_version = max_version + 1
-
-            timestamp_ms = int(_time.time() * 1000)
-
-            for category, app_ids in shortcuts_by_category.items():
-                if not app_ids:
-                    continue
-
-                b64 = base64.b64encode(category.encode("utf-8")).decode().rstrip("=")
-                coll_id = f"srm-{b64}"
-                cloud_key = f"user-collections.{coll_id}"
-
-                value_obj = {
-                    "id": coll_id,
-                    "added": list(app_ids),
-                    "removed": [],
-                }
-                new_entry = {
-                    "key": cloud_key,
-                    "timestamp": timestamp_ms,
-                    "value": json.dumps(value_obj, separators=(",", ":")),
-                    "version": str(next_version),
-                    "conflictResolutionMethod": "custom",
-                    "strMethodId": "union-collections",
-                }
-                if cloud_key in cloud_index:
-                    # Replace existing entry (may be is_deleted=True)
-                    cloud_data[cloud_index[cloud_key]] = [cloud_key, new_entry]
-                else:
-                    cloud_data.append([cloud_key, new_entry])
-                    cloud_index[cloud_key] = len(cloud_data) - 1
-
-                next_version += 1
-
-            # Write back cloud storage files
-            import tempfile as _tempfile, os as _os
-            tmp_cloud = cloud_path.with_suffix(".json.sgm_tmp")
-            with tmp_cloud.open("w", encoding="utf-8") as f:
-                json.dump(cloud_data, f, separators=(",", ":"))
-            _os.replace(tmp_cloud, cloud_path)
-
-            # Clear the modified file (pending changes) — we've written the full state
-            cloud_modified_path.write_text("[]", encoding="utf-8")
-
-            logger.info(f"Updated cloud-storage-namespace-1.json with Steam collections")
-        except (OSError, json.JSONDecodeError) as e:
-            logger.warning(f"Failed to update cloud storage collections: {e}")
-    else:
+    if not cloud_path.exists():
         logger.debug(f"Cloud storage not found at {cloud_path}, skipping")
-
-    try:
-        content = vdf_path.read_text(encoding="utf-8")
-    except OSError as e:
-        logger.error(f"Failed to read localconfig.vdf: {e}")
         return False
 
-    # Extract the user-collections JSON value (it's a JSON string escaped inside VDF)
-    pattern = re.compile(r'("user-collections"\t+)"(.*?)"(\s*\n)', re.DOTALL)
-    match = pattern.search(content)
+    try:
+        cloud_data: list = json.load(cloud_path.open(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning(f"Failed to read cloud storage: {e}")
+        return False
 
-    if match:
-        raw_json = match.group(2).replace('\\"', '"')
-        try:
-            collections: dict = json.loads(raw_json)
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse user-collections JSON: {e}")
-            return False
-    else:
-        # No user-collections key yet — we'll create it
-        collections = {}
+    # --- helpers --------------------------------------------------------
+    def _make_uc_id(category: str) -> str:
+        """Derive a stable uc- ID from the category name."""
+        digest = hashlib.sha1(f"sgm-{category}".encode()).digest()
+        # Use url-safe base64, strip padding, take first 16 chars
+        b64 = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+        return f"uc-{b64[:16]}"
 
-    changed = False
+    def _get_max_version(data: list) -> int:
+        v = 1
+        for item in data:
+            if isinstance(item, list) and len(item) >= 2:
+                try:
+                    v = max(v, int(str(item[1].get("version", "0"))))
+                except (ValueError, TypeError):
+                    pass
+        return v
+
+    # Build lookup: key -> list index
+    cloud_index: dict[str, int] = {}
+    for i, item in enumerate(cloud_data):
+        if isinstance(item, list) and len(item) >= 2 and isinstance(item[1], dict):
+            cloud_index[item[1].get("key", "")] = i
+
+    next_version = _get_max_version(cloud_data) + 1
+    timestamp_ms = int(_time.time() * 1000)
+
+    # 1. Mark all old srm-* collection entries as deleted
+    for key, idx in list(cloud_index.items()):
+        if key.startswith("user-collections.srm-"):
+            deleted_entry = {
+                "key": key,
+                "timestamp": timestamp_ms,
+                "is_deleted": True,
+                "version": str(next_version),
+            }
+            cloud_data[idx] = [key, deleted_entry]
+            next_version += 1
+            logger.debug(f"Marked old SRM collection as deleted: {key}")
+
+    # 2. Write new uc-* entries
+    new_collections: dict[str, dict] = {}  # coll_id -> value dict (for localconfig)
     for category, app_ids in shortcuts_by_category.items():
         if not app_ids:
             continue
 
-        b64 = base64.b64encode(category.encode("utf-8")).decode().rstrip("=")
-        coll_id = f"srm-{b64}"
+        coll_id = _make_uc_id(category)
+        cloud_key = f"user-collections.{coll_id}"
 
-        if coll_id not in collections:
-            collections[coll_id] = {"id": coll_id, "added": [], "removed": []}
-            logger.info(f"Creating Steam collection: {category!r} ({coll_id})")
-            changed = True
+        value_obj = {
+            "id": coll_id,
+            "name": category,
+            "added": list(app_ids),
+            "removed": [],
+        }
+        new_entry = {
+            "key": cloud_key,
+            "timestamp": timestamp_ms,
+            "value": json.dumps(value_obj, separators=(",", ":")),
+            "version": str(next_version),
+            "conflictResolutionMethod": "custom",
+            "strMethodId": "union-collections",
+        }
 
-        existing_added: list = collections[coll_id]["added"]
-        new_ids = [aid for aid in app_ids if aid not in existing_added]
-        if new_ids:
-            existing_added.extend(new_ids)
-            logger.info(f"Added {len(new_ids)} app IDs to collection {category!r}")
-            changed = True
+        if cloud_key in cloud_index:
+            cloud_data[cloud_index[cloud_key]] = [cloud_key, new_entry]
+        else:
+            cloud_data.append([cloud_key, new_entry])
+            cloud_index[cloud_key] = len(cloud_data) - 1
 
-    if not changed:
-        logger.debug("No collection changes needed")
-        return True
+        # For localconfig cache, Steam expects NO "name" field — just id/added/removed.
+        # Including "name" prevents Steam from showing games in the collection UI.
+        new_collections[coll_id] = {
+            "id": coll_id,
+            "added": list(app_ids),
+            "removed": [],
+        }
+        next_version += 1
+        logger.info(f"Wrote collection {category!r} ({coll_id}) with {len(app_ids)} games")
 
-    # Serialise back — escape quotes for VDF embedding
+    # 3. Persist cloud storage
+    try:
+        import os as _os
+        tmp_cloud = cloud_path.with_suffix(".json.sgm_tmp")
+        with tmp_cloud.open("w", encoding="utf-8") as f:
+            json.dump(cloud_data, f, separators=(",", ":"))
+        _os.replace(tmp_cloud, cloud_path)
+        cloud_modified_path.write_text("[]", encoding="utf-8")
+        logger.info("Updated cloud-storage-namespace-1.json with Steam collections")
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning(f"Failed to write cloud storage collections: {e}")
+        return False
+
+    # 4. Update localconfig.vdf user-collections cache (best-effort)
+    try:
+        content = vdf_path.read_text(encoding="utf-8")
+    except OSError as e:
+        logger.error(f"Failed to read localconfig.vdf: {e}")
+        return True  # cloud write succeeded; localconfig is optional cache
+
+    pattern = re.compile(r'("user-collections"\t+)"(.*?)"(\s*\n)', re.DOTALL)
+    match = pattern.search(content)
+
+    if match:
+        raw_json = match.group(2)
+        # VDF escaping: inner quotes are stored as \" in the file, which Python
+        # reads as the two chars \  ". We need to unescape them to parse JSON.
+        raw_json = raw_json.replace('\\\\"', '\x01').replace('\\"', '"').replace('\x01', '\\"')
+        try:
+            collections: dict = json.loads(raw_json)
+        except json.JSONDecodeError:
+            collections = {}
+    else:
+        collections = {}
+
+    # Remove old srm-* keys and any existing uc-* entries that have "name" (clean them up).
+    # Also strip "name" from any existing uc-* entries so Steam can display them.
+    cleaned: dict = {}
+    for k, v in collections.items():
+        if k.startswith("srm-"):
+            continue  # drop old SRM keys
+        if isinstance(v, dict) and "name" in v:
+            v = {kk: vv for kk, vv in v.items() if kk != "name"}
+        cleaned[k] = v
+    cleaned.update(new_collections)
+    collections = cleaned
+
     new_json = json.dumps(collections, separators=(",", ":")).replace('"', '\\"')
 
     if match:
@@ -682,27 +724,22 @@ def update_steam_collections(steam_path: Path,
             + content[match.end():]
         )
     else:
-        # Append before the closing braces of the appropriate section.
-        # Simplest safe approach: insert before the last occurrence of closing
-        # section markers (two closing braces at the end of the Software block).
         insert_line = f'\t\t"user-collections"\t\t"{new_json}"\n'
-        # Find a sensible insertion point — after "user-roaming-config-store"
         insert_match = re.search(r'("user-roaming-config-store".*?\n)', content, re.DOTALL)
         if insert_match:
             pos = insert_match.end()
             new_content = content[:pos] + insert_line + content[pos:]
         else:
-            # Fallback: append before the last closing brace block
             new_content = content.rstrip() + "\n" + insert_line
 
     try:
-        # Write atomically via temp file
-        import tempfile, os
+        import os
         tmp = vdf_path.with_suffix(".vdf.sgm_tmp")
         tmp.write_text(new_content, encoding="utf-8")
         os.replace(tmp, vdf_path)
-        logger.info(f"Updated localconfig.vdf with Steam collections")
-        return True
+        logger.info("Updated localconfig.vdf with Steam collections")
     except OSError as e:
         logger.error(f"Failed to write localconfig.vdf: {e}")
-        return False
+
+    return True
+
