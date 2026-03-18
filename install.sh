@@ -26,6 +26,7 @@ SGM_FILES=(
     shortcuts.py
     art_scraper.py
     portable.py
+    sources.py
 )
 
 echo ""

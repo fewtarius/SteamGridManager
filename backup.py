@@ -139,6 +139,15 @@ def create_backup(grid_path: Path, backup_dir: Path, dry_run: bool = False) -> i
     with open(snapshot_dir / 'metadata.json', 'w', encoding='utf-8') as f:
         json.dump(metadata, f, indent=2)
     
+    # Also back up shortcuts.vdf if it exists alongside the grid folder
+    shortcuts_src = grid_path.parent / 'shortcuts.vdf'
+    if shortcuts_src.exists():
+        try:
+            shutil.copy2(str(shortcuts_src), str(snapshot_dir / 'shortcuts.vdf'))
+            logger.debug(f"Backed up shortcuts.vdf")
+        except (OSError, shutil.Error) as e:
+            logger.warning(f"Could not back up shortcuts.vdf: {e}")
+    
     status = "[OK]" if errors == 0 else "[WARN]"
     print(f"\n  {status} Backup complete!")
     print(f"    Copied: {copied:} files + {len(symlinks):} symlink mappings saved")
@@ -297,6 +306,18 @@ def restore_backup(
         print(f"    File errors:      {errors}")
     if links_failed:
         print(f"    Symlink errors:   {links_failed}")
+    
+    # Restore shortcuts.vdf if it was backed up
+    shortcuts_backup = backup['path'] / 'shortcuts.vdf'
+    if shortcuts_backup.exists():
+        shortcuts_dst = grid_path.parent / 'shortcuts.vdf'
+        try:
+            shutil.copy2(str(shortcuts_backup), str(shortcuts_dst))
+            print(f"    shortcuts.vdf:    restored")
+        except (OSError, shutil.Error) as e:
+            logger.warning(f"Could not restore shortcuts.vdf: {e}")
+            print(f"    shortcuts.vdf:    [WARN] failed to restore: {e}")
+    
     print()
     
     return 0 if (errors == 0 and links_failed == 0) else 1
