@@ -743,3 +743,110 @@ def update_steam_collections(steam_path: Path,
 
     return True
 
+
+
+def delete_steam_collections(steam_path: Path,
+                             category_names: set,
+                             user_id: Optional[str] = None) -> bool:
+    """Mark Steam collections as deleted in cloud storage.
+
+    This is the removal counterpart to update_steam_collections().  It marks
+    the ``uc-*`` entries for the given category names as ``is_deleted`` so
+    Steam stops showing them.
+
+    Args:
+        steam_path: Steam installation path.
+        category_names: Set of collection names to delete (e.g. {"Atari 2600"}).
+        user_id: Specific Steam user ID, or None to auto-detect.
+
+    Returns:
+        True on success, False on failure.
+    """
+    import base64
+    import hashlib
+    import json
+    import re
+    import time as _time
+
+    try:
+        vdf_path = find_localconfig_vdf(steam_path, user_id)
+    except FileNotFoundError as e:
+        logger.warning(f"Could not find localconfig.vdf: {e}")
+        return False
+
+    cloud_path = vdf_path.parent / "cloudstorage" / "cloud-storage-namespace-1.json"
+    cloud_modified_path = (
+        vdf_path.parent / "cloudstorage" / "cloud-storage-namespace-1.modified.json"
+    )
+
+    if not cloud_path.exists():
+        logger.debug(f"Cloud storage not found at {cloud_path}, skipping")
+        return False
+
+    try:
+        cloud_data: list = json.load(cloud_path.open(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning(f"Failed to read cloud storage: {e}")
+        return False
+
+    def _make_uc_id(category: str) -> str:
+        digest = hashlib.sha1(f"sgm-{category}".encode()).digest()
+        b64 = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+        return f"uc-{b64[:16]}"
+
+    def _get_max_version(data: list) -> int:
+        v = 1
+        for item in data:
+            if isinstance(item, list) and len(item) >= 2:
+                try:
+                    v = max(v, int(str(item[1].get("version", "0"))))
+                except (ValueError, TypeError):
+                    pass
+        return v
+
+    cloud_index: dict[str, int] = {}
+    for i, item in enumerate(cloud_data):
+        if isinstance(item, list) and len(item) >= 2 and isinstance(item[1], dict):
+            cloud_index[item[1].get("key", "")] = i
+
+    next_version = _get_max_version(cloud_data) + 1
+    timestamp_ms = int(_time.time() * 1000)
+
+    deleted_count = 0
+    for category in category_names:
+        coll_id = _make_uc_id(category)
+        cloud_key = f"user-collections.{coll_id}"
+
+        deleted_entry = {
+            "key": cloud_key,
+            "timestamp": timestamp_ms,
+            "is_deleted": True,
+            "version": str(next_version),
+        }
+
+        if cloud_key in cloud_index:
+            cloud_data[cloud_index[cloud_key]] = [cloud_key, deleted_entry]
+        else:
+            # Add a new deleted entry so Steam syncs the deletion
+            cloud_data.append([cloud_key, deleted_entry])
+
+        next_version += 1
+        deleted_count += 1
+        logger.info(f"Marked collection {category!r} as deleted")
+
+    if deleted_count == 0:
+        logger.debug("No collections found to delete")
+        return True
+
+    try:
+        import os as _os
+        tmp_cloud = cloud_path.with_suffix(".json.sgm_tmp")
+        with tmp_cloud.open("w", encoding="utf-8") as f:
+            json.dump(cloud_data, f, separators=(",", ":"))
+        _os.replace(tmp_cloud, cloud_path)
+        cloud_modified_path.write_text("[]", encoding="utf-8")
+        logger.info(f"Deleted {deleted_count} collection(s) from cloud storage")
+        return True
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning(f"Failed to write cloud storage: {e}")
+        return False

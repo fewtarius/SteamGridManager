@@ -11,13 +11,16 @@ On SteamOS (Steam Deck), custom game images (capsules, heroes, logos, icons) liv
 `sgm` backs up and restores grid images, re-downloads from multiple art providers, auto-detects when images are wiped, and manages game libraries with Steam integration.
 
 ```bash
-sgm backup                         # snapshot all grid images
-sgm restore                        # restore after a Steam wipe
-sgm refresh --missing              # re-download missing from SteamGridDB
-sgm monitor install                # auto-restore when images are wiped
-sgm rom scan /path/to/Roms         # scan game library
-sgm rom import /path/to/Roms       # create shortcuts + download artwork
-sgm export create                  # portable bundle for another device
+sgm backup                                   # snapshot all grid images
+sgm restore                                  # restore after a Steam wipe
+sgm refresh --missing                        # re-download missing from SteamGridDB
+sgm monitor install                          # auto-restore when images are wiped
+sgm rom scan /path/to/Roms                   # scan game library
+sgm rom import /path/to/Roms                 # create shortcuts + download artwork
+sgm rom art scrape --system nes              # re-scrape missing art for a system
+sgm rom art scrape --game "Contra"           # re-scrape one specific game
+sgm rom remove --system atari2600            # remove a system's shortcuts + art
+sgm export create                            # portable bundle for another device
 ```
 
 ---
@@ -307,11 +310,42 @@ sgm cleans ROM filenames automatically:
 ### ROM Artwork Tools
 
 ```bash
+# Re-scrape missing artwork (the most useful command when art didn't download)
+sgm rom art scrape --system nes                       # scrape all missing art for NES
+sgm rom art scrape --system nes --game "Contra"       # scrape one specific game
+sgm rom art scrape --all                              # re-scrape everything (all systems)
+sgm rom art scrape --system snes --all                # force re-download even if art exists
+sgm rom art scrape --dry-run                          # preview what would be scraped
+
+# Other artwork utilities
 sgm rom art remap --old-shortcuts /path/to/old-shortcuts.vdf   # migrate art from SRM IDs to SGM IDs
 sgm rom art fix-mount --old-path /media/deck --new-path /media  # update art after SD card path change
-sgm rom art clear --system nes                                  # remove art for a system
-sgm rom art clear --all                                         # remove all ROM art
+sgm rom art clear --system nes                                   # remove art for a system
+sgm rom art clear --all                                          # remove all ROM art
 ```
+
+**Artwork scrape tips:**
+- If a game has no art after `rom import`, run `sgm rom art scrape --system <name>` to retry
+- Use `--game "partial name"` to scrape just one game: `sgm rom art scrape --game "Sonic"`
+- Three providers are tried in order: ScreenScraper → TheGamesDB → SteamGridDB
+- Each art type (tall/wide/hero/logo/icon) cascades independently — if ScreenScraper has box art but no icon, SteamGridDB fills in the icon
+
+### Remove a System
+
+Remove all shortcuts and artwork for an entire system:
+
+```bash
+sgm rom remove --system atari2600             # interactive confirmation
+sgm rom remove --system atari2600 --yes       # skip confirmation
+sgm rom remove --system atari2600 --dry-run   # preview without changes
+```
+
+This removes:
+1. All shortcuts for that system from `shortcuts.vdf`
+2. All grid art files (tall, wide, hero, logo, icon) for those games
+3. The Steam library collection for that system
+
+Restart Steam after removing to see the changes.
 
 ### Steam Collections
 

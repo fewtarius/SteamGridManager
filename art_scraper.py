@@ -282,16 +282,37 @@ def _http_get(url: str, headers: Optional[Dict[str, str]] = None,
 
 def _http_get_json(url: str, headers: Optional[Dict[str, str]] = None,
                    timeout: int = 30) -> Optional[dict]:
-    """HTTP GET returning parsed JSON."""
+    """HTTP GET returning parsed JSON.
+
+    Tries urllib first; if the status is not 200 (e.g. 403 Cloudflare block),
+    falls back to curl subprocess which uses a real browser-like UA.
+    """
+    import subprocess
     body, status, _ = _http_get(url, headers, timeout)
-    if status != 200:
-        logger.debug(f"HTTP {status} from {url}")
-        return None
+    if status == 200:
+        try:
+            return json.loads(body)
+        except json.JSONDecodeError as e:
+            logger.debug(f"JSON decode error from {url}: {e}")
+            return None
+
+    # Fall back to curl
+    logger.debug(f"urllib HTTP {status} from {url}, retrying with curl")
+    cmd = ['curl', '-s', '-L', '-A', 'SGM/1.0']
+    if headers:
+        for k, v in headers.items():
+            cmd += ['-H', f'{k}: {v}']
+    cmd.append(url)
     try:
-        return json.loads(body)
-    except json.JSONDecodeError as e:
-        logger.debug(f"JSON decode error from {url}: {e}")
-        return None
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        if result.returncode == 0 and result.stdout:
+            try:
+                return json.loads(result.stdout)
+            except json.JSONDecodeError as e:
+                logger.debug(f"curl JSON decode error from {url}: {e}")
+    except Exception as e:
+        logger.debug(f"curl fallback failed for {url}: {e}")
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -901,9 +922,9 @@ class CascadeScraper:
 
                 logger.debug(f"  {provider.name}: matched '{match.title}' (id={match.game_id})")
 
-                # Get artwork
+                # Get artwork (only request types still missing)
                 art = self._get_artwork(provider, match.game_id,
-                                        screenscraper_id)
+                                        screenscraper_id, wanted_types=remaining)
 
                 for art_type, art_result in art.items():
                     if art_type in remaining:
@@ -943,14 +964,15 @@ class CascadeScraper:
         return None
 
     def _get_artwork(self, provider, game_id: str,
-                     ss_id: Optional[int] = None) -> Dict[str, ArtResult]:
+                     ss_id: Optional[int] = None,
+                     wanted_types: Optional[Set[str]] = None) -> Dict[str, ArtResult]:
         """Get artwork from a specific provider."""
         if isinstance(provider, ScreenScraperProvider):
             return provider.get_artwork(game_id, ss_id)
         elif isinstance(provider, TheGamesDBProvider):
             return provider.get_artwork(game_id)
         elif isinstance(provider, SteamGridDBProvider):
-            return provider.get_artwork(game_id)
+            return provider.get_artwork(game_id, art_types=list(wanted_types) if wanted_types else None)
         return {}
 
 
@@ -960,6 +982,9 @@ class CascadeScraper:
 
 def download_image(url: str, output_path: Path, timeout: int = 30) -> bool:
     """Download an image file from a URL.
+
+    Tries urllib first; falls back to curl subprocess for URLs that block
+    Python's default User-Agent (e.g. Cloudflare-protected origins).
 
     Args:
         url: Image URL to download.
@@ -983,8 +1008,9 @@ def download_image(url: str, output_path: Path, timeout: int = 30) -> bool:
 
         body, status, headers = _http_get(url, timeout=timeout)
         if status != 200 or len(body) < 100:
-            logger.warning(f"Download failed ({status}): {url}")
-            return False
+            # Fall back to curl
+            logger.debug(f"urllib failed ({status}), trying curl: {url}")
+            return _curl_download(url, output_path, timeout=timeout)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(body)
@@ -993,6 +1019,25 @@ def download_image(url: str, output_path: Path, timeout: int = 30) -> bool:
 
     except Exception as e:
         logger.error(f"Download error: {url} - {e}")
+        return False
+
+
+def _curl_download(url: str, dest: Path, timeout: int = 60) -> bool:
+    """Download a file using curl subprocess (fallback for urllib failures)."""
+    import subprocess
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            ['curl', '-s', '-L', '-A', 'SGM/1.0', '-o', str(dest), url],
+            capture_output=True, timeout=timeout,
+        )
+        if result.returncode == 0 and dest.exists() and dest.stat().st_size > 100:
+            logger.debug(f"curl downloaded {dest.stat().st_size} bytes -> {dest}")
+            return True
+        logger.warning(f"curl download failed for {url}")
+        return False
+    except Exception as e:
+        logger.debug(f"curl failed: {url}: {e}")
         return False
 
 
