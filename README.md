@@ -129,12 +129,15 @@ sgm status
 
 ### `sgm backup [--dry-run]`
 
-Create a timestamped backup of all grid images including symlinks.
+Create a timestamped backup of all grid images and shortcuts.vdf.
 
 ```bash
 sgm backup              # create backup
 sgm backup --dry-run    # preview without backing up
 ```
+
+Backups are stored in `~/.local/share/sgm/backups/<timestamp>/` and include all
+grid images, symlinks, and your `shortcuts.vdf` file for complete recovery.
 
 ### `sgm restore [--list] [--timestamp TS] [--dry-run] [--force]`
 
@@ -300,6 +303,23 @@ sgm cleans ROM filenames automatically:
 | `Game Title (USA).sfc` | Game Title |
 | `Game Title (USA) (v1.01).iso` | Game Title |
 | `Game v1.001 (2000)(Publisher)(NTSC)(US)[!]` | Game |
+
+### ROM Artwork Tools
+
+```bash
+sgm rom art remap --old-shortcuts /path/to/old-shortcuts.vdf   # migrate art from SRM IDs to SGM IDs
+sgm rom art fix-mount --old-path /media/deck --new-path /media  # update art after SD card path change
+sgm rom art clear --system nes                                  # remove art for a system
+sgm rom art clear --all                                         # remove all ROM art
+```
+
+### Steam Collections
+
+Rebuild Steam collections from current shortcuts (groups games by system tag):
+
+```bash
+sgm rom collections
+```
 | `Game Title (Disc 1).iso` | Game Title |
 | `Game Title (Europe) (En,Fr,De).iso` | Game Title |
 
@@ -310,6 +330,7 @@ Handles GoodTools, No-Intro, and Redump naming conventions. Multi-disc games are
 ## Portable Backup
 
 Transfer your entire game library (images + shortcuts) between devices.
+Bundles include all grid images and a `shortcuts.json` for shortcut recreation.
 
 ### Export
 
@@ -326,6 +347,7 @@ sgm export list                    # list available bundles
 sgm import /path/to/bundle         # merge with existing (default)
 sgm import /path/to/bundle --missing  # only fill in missing art types
 sgm import /path/to/bundle --replace  # overwrite all existing
+sgm import /path/to/bundle --with-shortcuts  # also recreate shortcut entries
 sgm import /path/to/bundle --dry-run  # preview only
 ```
 
