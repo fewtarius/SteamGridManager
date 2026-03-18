@@ -63,6 +63,9 @@ for f in "${SGM_FILES[@]}"; do
         exit 1
     fi
 done
+chmod +x "$INSTALL_DIR/sgm.py"
+# Create ./sgm symlink in install dir for direct invocation from the repo
+ln -sf sgm.py "$INSTALL_DIR/sgm"
 echo "  Copied ${#SGM_FILES[@]} files"
 
 # Copy extras if present

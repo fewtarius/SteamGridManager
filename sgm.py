@@ -475,8 +475,185 @@ def cmd_rom_art(args: argparse.Namespace) -> int:
     if art_action == 'clear':
         return _cmd_rom_art_clear(args)
 
-    print("Usage: sgm rom art <clear|remap|fix-mount> [options]")
+    if art_action == 'scrape':
+        return _cmd_rom_art_scrape(args)
+
+    print("Usage: sgm rom art <clear|scrape|remap|fix-mount> [options]")
     return 1
+
+
+def _cmd_rom_art_scrape(args: argparse.Namespace) -> int:
+    """Scrape missing (or all) artwork for ROM shortcuts by system or game name.
+
+    This is the go-to command when 'rom import' missed art for some games.
+    It re-runs the cascade scraper only for games that are missing images.
+    """
+    from config import config_exists, get_resolved_config
+    from steam import find_steam_path, find_grid_path
+    from shortcuts import get_existing_shortcuts, generate_short_app_id
+    from systems import get_system
+    from art_scraper import (
+        CascadeScraper, save_grid_images, ART_TYPES,
+        store_art_in_cache, DEFAULT_CACHE_DIR,
+    )
+
+    try:
+        if config_exists():
+            config = get_resolved_config()
+            steam_path = Path(config['steam_path'])
+            user_id = config.get('steam_user_id', 'auto')
+        else:
+            steam_path = find_steam_path()
+            config = {'steam_path': str(steam_path), 'steam_user_id': 'auto'}
+            user_id = 'auto'
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return 1
+
+    if not config.get('api_key'):
+        print("Error: No SteamGridDB API key configured.")
+        print("Run: sgm config set api_key YOUR_KEY")
+        return 1
+
+    uid = user_id if user_id != 'auto' else None
+    try:
+        grid_path = find_grid_path(steam_path, uid)
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return 1
+
+    system_filter = getattr(args, 'system', None)
+    game_filter = (getattr(args, 'game', None) or '').lower()
+    force_all = getattr(args, 'all', False)
+
+    # Load all shortcuts, filter by system tag
+    all_shortcuts = get_existing_shortcuts(steam_path, uid)
+
+    if system_filter:
+        sys_def = get_system(system_filter)
+        if not sys_def:
+            print(f"Error: Unknown system '{system_filter}'.")
+            print("Run 'sgm rom systems' to see supported system names.")
+            return 1
+        all_tags = sys_def.all_category_tags()
+        shortcuts = [
+            sc for sc in all_shortcuts
+            if any(str(v) in all_tags for v in sc.tags.values())
+        ]
+        sys_info = {system_filter: sys_def}
+    else:
+        # All ROM shortcuts (any known system tag)
+        from systems import SYSTEMS
+        all_rom_tags: set[str] = set()
+        sys_info: dict = {}
+        for sname, sdef in SYSTEMS.items():
+            all_rom_tags.update(sdef.all_category_tags())
+            sys_info[sname] = sdef
+        shortcuts = [
+            sc for sc in all_shortcuts
+            if any(str(v) in all_rom_tags for v in sc.tags.values())
+        ]
+
+    # Filter by game name if specified
+    if game_filter:
+        shortcuts = [sc for sc in shortcuts if game_filter in sc.appname.lower()]
+
+    if not shortcuts:
+        print(f"\nNo matching ROM shortcuts found.\n")
+        return 0
+
+    # Build work list — check which art is missing unless --all
+    _art_suffixes = {
+        'tall': ('p.png', 'p.jpg'),
+        'wide': ('.png', '.jpg'),
+        'hero': ('_hero.png', '_hero.jpg'),
+        'logo': ('_logo.png', '_logo.jpg'),
+        'icon': ('_icon.png', '_icon.jpg'),
+    }
+
+    work_list = []  # list of (shortcut, short_id, missing_types, sys_def)
+    for sc in shortcuts:
+        short_id = str(sc.appid & 0xFFFFFFFF)
+        if force_all:
+            missing = set(ART_TYPES)
+        else:
+            missing = set()
+            for art_type, suffixes in _art_suffixes.items():
+                if not any((grid_path / f"{short_id}{s}").exists() for s in suffixes):
+                    missing.add(art_type)
+        if missing:
+            # Find the sys_def for this shortcut's tag
+            sc_tag_val = next((str(v) for v in sc.tags.values()), '')
+            matched_sys = None
+            for sname, sdef in sys_info.items():
+                if sc_tag_val in sdef.all_category_tags():
+                    matched_sys = sdef
+                    break
+            work_list.append((sc, short_id, missing, matched_sys, sc_tag_val))
+
+    if not work_list:
+        print(f"\n  All {len(shortcuts)} shortcut(s) already have complete artwork.\n")
+        return 0
+
+    print(f"\n  ROM Art Scrape")
+    if system_filter:
+        print(f"  System:   {get_system(system_filter).fullname}")
+    if game_filter:
+        print(f"  Game:     {game_filter!r}")
+    print(f"  To scrape: {len(work_list)} game(s) with missing art\n")
+
+    if args.dry_run:
+        for sc, short_id, missing, _, _tag in work_list[:30]:
+            missing_str = ', '.join(sorted(missing))
+            print(f"  {sc.appname[:55]:55s}  missing: {missing_str}")
+        if len(work_list) > 30:
+            print(f"  ... and {len(work_list) - 30} more")
+        print(f"\n  (dry run — no changes made)\n")
+        return 0
+
+    scraper = CascadeScraper(config)
+    cache_dir = Path(config.get('art_cache_dir', '') or DEFAULT_CACHE_DIR).expanduser()
+
+    GREEN = "\033[32m"; YELLOW = "\033[33m"; RED = "\033[31m"
+    CYAN = "\033[36m"; GREY = "\033[90m"; RESET = "\033[0m"; BOLD = "\033[1m"
+
+    fetched = 0
+    failed = 0
+    total = len(work_list)
+
+    for idx, (sc, short_id, missing, sdef, sc_tag_val) in enumerate(work_list, 1):
+        label = sc.appname[:50].ljust(50)
+        counter = f"{GREY}[{idx:>{len(str(total))}}/{total}]{RESET}"
+
+        ss_id = sdef.screenscraper_id if sdef else None
+        tgdb_id = sdef.thegamesdb_id if sdef else None
+
+        try:
+            artwork = scraper.scrape_game(
+                title=sc.appname,
+                system_name=sc_tag_val if not sdef else sdef.fullname,
+                screenscraper_id=ss_id,
+                thegamesdb_id=tgdb_id,
+                wanted_types=missing,
+            )
+            if artwork:
+                saved = save_grid_images(short_id, artwork, grid_path)
+                if saved:
+                    store_art_in_cache(sc.appname, sdef.fullname if sdef else '', saved, cache_dir=cache_dir)
+                n = len(saved)
+                colour = GREEN if n == len(missing) else YELLOW
+                print(f"  {counter} {colour}{label}{RESET} {colour}{n}/{len(missing)} images{RESET}")
+                fetched += n
+            else:
+                print(f"  {counter} {RED}{label}{RESET} no art found")
+                failed += 1
+        except Exception as e:
+            print(f"  {counter} {RED}{label}{RESET} error: {e}")
+            failed += 1
+
+    print(f"\n  {BOLD}Results:{RESET} {GREEN}{total - failed} games with art{RESET}, "
+          f"{RED}{failed} not found{RESET}, {fetched} images downloaded\n")
+    return 0
 
 
 def _cmd_rom_art_remap(args: argparse.Namespace) -> int:
@@ -878,6 +1055,140 @@ def _cmd_rom_art_clear(args: argparse.Namespace) -> int:
 
     return 0
 
+
+
+def cmd_rom_remove(args: argparse.Namespace) -> int:
+    """Remove all shortcuts and art for a given ROM system.
+
+    Steps:
+    1. Look up the system's Steam category tag (e.g. "Atari 2600").
+    2. Find all shortcuts in shortcuts.vdf tagged with that category.
+    3. Collect their short app IDs so we can delete their art.
+    4. Remove matching shortcuts from shortcuts.vdf.
+    5. Delete all grid art files for those app IDs.
+    6. Mark the Steam collection as deleted.
+    """
+    from config import config_exists, get_resolved_config
+    from steam import find_steam_path, find_grid_path
+    from shortcuts import (
+        get_existing_shortcuts,
+        write_shortcuts_vdf,
+        find_shortcuts_vdf,
+        generate_short_app_id,
+        delete_steam_collections,
+    )
+    from systems import get_system
+
+    system_name = args.system
+    sys_def = get_system(system_name)
+    if not sys_def:
+        print(f"Error: Unknown system '{system_name}'.")
+        print("Run 'sgm rom systems' to see supported system names.")
+        return 1
+
+    try:
+        if config_exists():
+            config = get_resolved_config()
+            steam_path = Path(config['steam_path'])
+            user_id = config.get('steam_user_id', 'auto')
+        else:
+            steam_path = find_steam_path()
+            user_id = 'auto'
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return 1
+
+    uid = user_id if user_id != 'auto' else None
+
+    try:
+        grid_path = find_grid_path(steam_path, uid)
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return 1
+
+    # All category tag names for this system (including legacy aliases)
+    all_tags = sys_def.all_category_tags()
+    primary_tag = sys_def.get_steam_category()
+
+    # Find matching shortcuts
+    all_shortcuts = get_existing_shortcuts(steam_path, uid)
+    matching = [
+        sc for sc in all_shortcuts
+        if any(str(v) in all_tags for v in sc.tags.values())
+    ]
+
+    if not matching:
+        print(f"\nNo shortcuts found for system '{system_name}' "
+              f"(category: {primary_tag!r}).\n")
+        return 0
+
+    # Collect art files to delete
+    _art_suffixes = (
+        ".png", ".jpg", "p.png", "p.jpg",
+        "_hero.png", "_hero.jpg",
+        "_logo.png", "_logo.jpg",
+        "_icon.png", "_icon.jpg",
+    )
+    art_files: list[Path] = []
+    for sc in matching:
+        short_id = str(sc.appid & 0xFFFFFFFF)
+        for suffix in _art_suffixes:
+            img = grid_path / f"{short_id}{suffix}"
+            if img.exists() or img.is_symlink():
+                art_files.append(img)
+
+    print(f"\n  Remove System: {sys_def.fullname}")
+    print(f"  Category tag:  {primary_tag}")
+    print(f"  Shortcuts:     {len(matching)}")
+    print(f"  Art files:     {len(art_files)}\n")
+
+    if not args.yes and not args.dry_run:
+        answer = input(
+            f"  Remove {len(matching)} shortcuts and {len(art_files)} art files? [y/N] "
+        ).strip().lower()
+        if answer not in ('y', 'yes'):
+            print("  Aborted.\n")
+            return 0
+
+    if args.dry_run:
+        print("  [DRY RUN] Would remove shortcuts:")
+        for sc in sorted(matching, key=lambda s: s.appname)[:20]:
+            print(f"    {sc.appname}")
+        if len(matching) > 20:
+            print(f"    ... and {len(matching) - 20} more")
+        print(f"\n  [DRY RUN] Would delete {len(art_files)} art files.")
+        print(f"  [DRY RUN] Would mark collection {primary_tag!r} as deleted.\n")
+        print("  (dry run — no changes made)\n")
+        return 0
+
+    # 1. Remove shortcuts from VDF
+    keep = [sc for sc in all_shortcuts if sc not in matching]
+    try:
+        vdf_path = find_shortcuts_vdf(steam_path, uid)
+        write_shortcuts_vdf(vdf_path, keep)
+        print(f"  Removed {len(matching)} shortcut(s) from shortcuts.vdf")
+    except Exception as e:
+        print(f"  Error updating shortcuts.vdf: {e}")
+        return 1
+
+    # 2. Delete art files
+    removed_art = 0
+    for img in art_files:
+        try:
+            img.unlink()
+            removed_art += 1
+        except OSError as e:
+            print(f"  Warning: Could not delete {img.name}: {e}")
+    print(f"  Deleted {removed_art} art file(s)")
+
+    # 3. Mark Steam collection as deleted
+    delete_steam_collections(steam_path, all_tags, uid)
+    print(f"  Marked collection {primary_tag!r} as deleted in Steam")
+
+    notify_steam_reload()
+
+    print(f"\n  Done. Restart Steam to see changes.\n")
+    return 0
 
 
 def cmd_rom(args: argparse.Namespace) -> int:
@@ -1734,6 +2045,23 @@ def main() -> int:
 
     rom_art = rom_sub.add_parser('art', help='Manage ROM artwork')
     rom_art_sub = rom_art.add_subparsers(dest='rom_art_action')
+
+    rom_art_scrape = rom_art_sub.add_parser(
+        'scrape',
+        help='Scrape missing artwork for ROM shortcuts (retry failed art downloads)')
+    rom_art_scrape.add_argument(
+        '--system', '-s',
+        help='Only scrape art for this system (e.g. nes, atari2600)')
+    rom_art_scrape.add_argument(
+        '--game', '-g',
+        help='Only scrape art for games whose name contains this text')
+    rom_art_scrape.add_argument(
+        '--all', action='store_true',
+        help='Re-download all art even if files already exist')
+    rom_art_scrape.add_argument(
+        '--dry-run', action='store_true',
+        help='Show what would be scraped without downloading')
+
     rom_art_clear = rom_art_sub.add_parser('clear', help='Remove grid art for ROM games')
     rom_art_clear.add_argument('path', help='Path to ROM root directory')
     rom_art_clear.add_argument('--system', '-s', help='Only clear art for this system')
@@ -1773,6 +2101,19 @@ def main() -> int:
         help='Print each rename operation')
 
     sub_rom.set_defaults(func=cmd_rom)
+
+    rom_remove = rom_sub.add_parser(
+        'remove', help='Remove all shortcuts and art for a system')
+    rom_remove.add_argument(
+        '--system', '-s', required=True,
+        help='System name to remove (e.g. atari2600, nes). Run "sgm rom systems" for names.')
+    rom_remove.add_argument(
+        '--yes', '-y', action='store_true',
+        help='Skip confirmation prompt')
+    rom_remove.add_argument(
+        '--dry-run', action='store_true',
+        help='Show what would be removed without making changes')
+    rom_remove.set_defaults(func=cmd_rom_remove)
 
     rom_collections = rom_sub.add_parser(
         'collections', help='Re-write Steam collections from current shortcuts.vdf')
