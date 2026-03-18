@@ -333,16 +333,29 @@ class ScreenScraperProvider:
 
     # Media type mapping: ScreenScraper type -> our art type
     MEDIA_MAP = {
+        # Tall capsule (box art front, preference order)
         "box-2D": "tall",           # Box art front
-        "box-3D": "tall",           # Box art 3D (fallback)
-        "wheel": "logo",            # Wheel/logo art
-        "wheel-hd": "logo",         # HD wheel (preferred)
-        "ss": "hero",               # Screenshot -> hero
-        "sstitle": "hero",          # Title screenshot -> hero (fallback)
-        "screenmarquee": "wide",    # Marquee -> wide capsule
+        "mixrbv1": "tall",          # Mix image v1 (composite)
+        "mixrbv2": "tall",          # Mix image v2
+        "box-3D": "tall",           # Box art 3D (last resort for tall)
+        # Wide capsule
+        "steamgrid": "wide",        # Steam grid banner (exact match)
+        "screenmarquee": "wide",    # Arcade marquee → wide capsule
         "screenmarqueesmall": "wide",
         "box-texture": "wide",      # Box texture as wide fallback
-        "mixrbv1": "tall",          # Mix images (composite) as fallback
+        # Hero/background
+        "background": "hero",       # Background art (preferred for hero)
+        "ss": "hero",               # In-game screenshot (fallback)
+        "sstitle": "hero",          # Title screen (last resort for hero)
+        # Logo
+        "wheel-hd": "logo",         # HD wheel (preferred)
+        "wheel": "logo",            # Standard wheel
+        "wheel-carbon": "logo",     # Carbon variant
+        "wheel-steel": "logo",      # Steel variant
+        # Icon
+        "pictocouleur": "icon",     # Colour icon/pictogram
+        "pictomonochrome": "icon",  # Monochrome icon (fallback)
+        "pictoliste": "icon",       # List icon (last resort)
     }
 
     def __init__(self, devid: str, devpassword: str,

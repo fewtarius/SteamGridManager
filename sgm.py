@@ -722,6 +722,13 @@ def _cmd_rom_art_scrape(args: argparse.Namespace) -> int:
 
     GREEN = "\033[32m"; YELLOW = "\033[33m"; RED = "\033[31m"
     CYAN = "\033[36m"; GREY = "\033[90m"; RESET = "\033[0m"; BOLD = "\033[1m"
+    BAR_WIDTH = 20
+
+    def _bar(current: int, total_b: int, width: int = BAR_WIDTH) -> str:
+        if total_b <= 0:
+            return f"[{'─' * width}]"
+        filled = int(width * current / total_b)
+        return f"[{'█' * filled}{'─' * (width - filled)}]"
 
     fetched = 0
     failed = 0
@@ -740,6 +747,19 @@ def _cmd_rom_art_scrape(args: argparse.Namespace) -> int:
             rom_path = None  # File not accessible (e.g. SD card not mounted)
         rom_filename: Optional[str] = rom_path.name if rom_path else None
 
+        # Hash progress callback — shows hashing bar then clears when done
+        hash_label = (rom_filename or sc.appname)[:28].ljust(28)
+
+        def _make_hash_cb(lbl: str, ctr: str):
+            def _cb(done: int, total_b: int) -> None:
+                bar = _bar(done, total_b)
+                pct = int(100 * done / total_b) if total_b else 0
+                print(f"\r  {ctr} {GREY}Hashing {lbl} {bar} {pct:3d}%{RESET}",
+                      end="", flush=True)
+            return _cb
+
+        hash_cb = _make_hash_cb(hash_label, counter) if rom_path else None
+
         try:
             artwork = scraper.scrape_game(
                 title=sc.appname,
@@ -748,6 +768,7 @@ def _cmd_rom_art_scrape(args: argparse.Namespace) -> int:
                 thegamesdb_id=tgdb_id,
                 rom_path=rom_path,
                 rom_filename=rom_filename,
+                hash_progress_cb=hash_cb,
                 wanted_types=missing,
             )
             if artwork:
@@ -756,19 +777,18 @@ def _cmd_rom_art_scrape(args: argparse.Namespace) -> int:
                     store_art_in_cache(sc.appname, sdef.fullname if sdef else '', saved, cache_dir=cache_dir)
                 n = len(saved)
                 colour = GREEN if n == len(missing) else YELLOW
-                print(f"  {counter} {colour}{label}{RESET} {colour}{n}/{len(missing)} images{RESET}")
+                print(f"\r  {counter} {colour}{label}{RESET} {colour}{n}/{len(missing)} images{RESET}  ")
                 fetched += n
             else:
-                print(f"  {counter} {RED}{label}{RESET} no art found")
+                print(f"\r  {counter} {RED}{label}{RESET} no art found           ")
                 failed += 1
         except Exception as e:
-            print(f"  {counter} {RED}{label}{RESET} error: {e}")
+            print(f"\r  {counter} {RED}{label}{RESET} error: {e}           ")
             failed += 1
 
     print(f"\n  {BOLD}Results:{RESET} {GREEN}{total - failed} games with art{RESET}, "
           f"{RED}{failed} not found{RESET}, {fetched} images downloaded\n")
     return 0
-
 
 def _cmd_rom_art_remap(args: argparse.Namespace) -> int:
     """Rename grid art files from old SRM appids to current SGM appids.
