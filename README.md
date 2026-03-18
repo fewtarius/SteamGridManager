@@ -148,18 +148,32 @@ sgm restore --dry-run    # preview without restoring
 sgm restore --force      # skip confirmation prompt
 ```
 
-### `sgm refresh [--all|--missing] [--type TYPE] [--dry-run]`
+### `sgm refresh [--all|--missing|--shortcuts] [--type TYPE] [--dry-run]`
 
 Re-download images from SteamGridDB using SRM artwork cache mappings.
 
 ```bash
 sgm refresh --missing        # only download missing images (default)
 sgm refresh --all            # re-download everything
+sgm refresh --shortcuts      # scrape art for non-ROM shortcuts (Heroic, flatpaks, other games)
 sgm refresh --type hero      # only refresh hero banners
 sgm refresh --dry-run        # preview without downloading
 ```
 
 Requires a SteamGridDB API key.
+
+### `sgm heroic [--no-art] [--dry-run]`
+
+Import games from Heroic Games Launcher as Steam non-Steam shortcuts and download artwork.
+
+```bash
+sgm heroic               # import new Heroic games and download art
+sgm heroic --no-art      # import shortcuts only, skip art download
+sgm heroic --dry-run     # preview what would be imported
+```
+
+Reads Heroic's game library config (GOG/Epic/Amazon) and adds any games not already in
+Steam's shortcuts.vdf. Existing shortcuts are never overwritten.
 
 ### `sgm config {init|show|set}`
 
@@ -363,8 +377,8 @@ Don't share your config file - it contains your API keys.
 
 | Type | Filename | Size | Location in Steam |
 |------|----------|------|-------------------|
-| Tall capsule | `{id}.png` | 600x900 | Library grid |
-| Wide capsule | `{id}p.png` | 920x430 | Shelf/carousel |
+| Tall capsule | `{id}p.png` | 600x900 | Library grid |
+| Wide capsule | `{id}.png` | 920x430 | Shelf/carousel |
 | Hero | `{id}_hero.png` | 1920x620 | Game detail banner |
 | Logo | `{id}_logo.png` | ~400x230 | Overlay on hero |
 | Icon | `{id}_icon.png` | 256x256 | Taskbar, friends |

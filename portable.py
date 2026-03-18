@@ -222,6 +222,15 @@ def export_bundle(grid_path: Path,
     manifest_path = bundle_path / "manifest.json"
     manifest_path.write_text(json.dumps(manifest.to_dict(), indent=2))
 
+    # Include shortcuts.vdf for full cross-device restore
+    shortcuts_src = grid_path.parent / 'shortcuts.vdf'
+    if shortcuts_src.exists():
+        try:
+            shutil.copy2(shortcuts_src, bundle_path / 'shortcuts.vdf')
+            logger.debug("Included shortcuts.vdf in bundle")
+        except (OSError, shutil.Error) as e:
+            logger.warning(f"Could not include shortcuts.vdf in bundle: {e}")
+
     logger.info(
         f"Exported bundle: {bundle_path}\n"
         f"  Games: {manifest.total_games}\n"
@@ -237,7 +246,8 @@ def import_bundle(bundle_path: Path,
                   mode: str = "merge",
                   systems_filter: Optional[Set[str]] = None,
                   remap_ids: Optional[Dict[str, str]] = None,
-                  dry_run: bool = False) -> Tuple[int, int, int]:
+                  dry_run: bool = False,
+                  with_shortcuts: bool = False) -> Tuple[int, int, int]:
     """Import a portable backup bundle into the current Steam grid folder.
 
     Args:
@@ -248,6 +258,7 @@ def import_bundle(bundle_path: Path,
         systems_filter: Only import these systems (None = all).
         remap_ids: Dict mapping old app_id -> new app_id for cross-device.
         dry_run: If True, don't actually copy files.
+        with_shortcuts: Also restore shortcuts.vdf from the bundle.
 
     Returns:
         Tuple of (imported_count, skipped_count, error_count).
@@ -321,6 +332,24 @@ def import_bundle(bundle_path: Path,
     logger.info(
         f"Import complete: {imported} imported, {skipped} skipped, {errors} errors"
     )
+
+    # Optionally restore shortcuts.vdf from the bundle
+    if with_shortcuts:
+        shortcuts_src = bundle_path / 'shortcuts.vdf'
+        if shortcuts_src.exists():
+            shortcuts_dst = grid_path.parent / 'shortcuts.vdf'
+            if dry_run:
+                logger.info(f"  [DRY-RUN] Would restore shortcuts.vdf -> {shortcuts_dst}")
+            else:
+                try:
+                    shutil.copy2(shortcuts_src, shortcuts_dst)
+                    logger.info(f"Restored shortcuts.vdf to {shortcuts_dst}")
+                except (OSError, shutil.Error) as e:
+                    logger.error(f"Failed to restore shortcuts.vdf: {e}")
+                    errors += 1
+        else:
+            logger.warning("Bundle does not contain shortcuts.vdf — skipping shortcut restore")
+
     return imported, skipped, errors
 
 

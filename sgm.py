@@ -9,6 +9,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import Optional
 
 __version__ = '1.0.0'
 
@@ -227,6 +228,133 @@ def cmd_restore(args: argparse.Namespace) -> int:
     return result
 
 
+def _cmd_refresh_shortcuts(
+    config: dict,
+    steam_path: Path,
+    grid_path: Path,
+    image_type: Optional[str],
+    dry_run: bool,
+) -> int:
+    """Scrape SteamGridDB art for non-ROM shortcuts that are missing images.
+
+    Covers Heroic games, flatpak apps, Wine/exe games — anything not tagged
+    with a known ROM system category.
+    """
+    from shortcuts import read_shortcuts_vdf, generate_short_app_id
+    from art_scraper import CascadeScraper, save_grid_images, ART_TYPES
+
+    # Known ROM system tags — shortcuts with any of these are skipped
+    ROM_TAGS = {
+        'Atari 2600', 'Master System', 'VIC-20', 'Game Gear',
+        'Nintendo Entertainment System', 'Super Nintendo', 'ColecoVision',
+        'Arcade', 'Genesis', 'Atari 5200', 'Atari Lynx', 'Commodore 64',
+        'Atari 7800', 'Game Boy Advance', 'Infocom / Z-Machine', 'Z-Machine',
+        'Amiga', 'Game Boy', 'Intellivision', 'GameCube', 'PlayStation Portable',
+        'Wii U', 'Game Boy Color', 'Dreamcast', 'PlayStation 2', 'Nintendo DS',
+        'Xbox', 'DOS', 'Neo Geo', 'PlayStation', 'Wii', 'Nintendo 64',
+        'Sega Saturn', 'SNES', 'NES', 'PC Engine', 'TurboGrafx-16',
+    }
+
+    # Find shortcuts.vdf
+    user_id = config.get('steam_user_id', 'auto')
+    uid = user_id if user_id != 'auto' else None
+    vdf_path = grid_path.parent / 'shortcuts.vdf'
+    if not vdf_path.exists():
+        print("No shortcuts.vdf found.")
+        return 1
+
+    shortcuts = read_shortcuts_vdf(vdf_path)
+
+    # Filter to non-ROM shortcuts
+    non_rom = [
+        sc for sc in shortcuts
+        if not any(str(v) in ROM_TAGS for v in sc.tags.values())
+    ]
+
+    # Determine which art types to look for
+    wanted_types: set[str]
+    if image_type:
+        wanted_types = {image_type}
+    else:
+        wanted_types = set(ART_TYPES)
+
+    # Collect suffix map for existence checks
+    suffix_map = {
+        'tall': 'p', 'wide': '', 'hero': '_hero', 'logo': '_logo', 'icon': '_icon'
+    }
+    suffix_map_filtered = {k: v for k, v in suffix_map.items() if k in wanted_types}
+
+    # Find which non-ROM shortcuts are missing art
+    to_scrape = []
+    for sc in non_rom:
+        short_id = generate_short_app_id(sc.exe, sc.appname)
+        missing_types = set()
+        for art_type, suffix in suffix_map_filtered.items():
+            has = any(
+                (grid_path / f"{short_id}{suffix}{ext}").exists()
+                for ext in ('.png', '.jpg')
+            )
+            if not has:
+                missing_types.add(art_type)
+        if missing_types:
+            to_scrape.append((sc, short_id, missing_types))
+
+    if not to_scrape:
+        print("All non-ROM shortcuts already have artwork.")
+        return 0
+
+    print(f"\n  Refresh Shortcut Art\n")
+    print(f"  Shortcuts to scrape: {len(to_scrape)}")
+    if dry_run:
+        print()
+        for sc, short_id, missing in sorted(to_scrape, key=lambda x: x[0].appname):
+            print(f"  [WOULD SCRAPE] {sc.appname}  (missing: {', '.join(sorted(missing))})")
+        print(f"\n  (dry run — no changes made)\n")
+        return 0
+
+    # Initialize scraper
+    try:
+        scraper = CascadeScraper(config)
+    except Exception as e:
+        print(f"Error initializing art scraper: {e}")
+        return 1
+
+    total_downloaded = 0
+    total_failed = 0
+    total_skipped = 0
+
+    print()
+    for sc, short_id, missing_types in sorted(to_scrape, key=lambda x: x[0].appname):
+        print(f"  {sc.appname}", end='', flush=True)
+        try:
+            artwork = scraper.scrape_game(sc.appname, wanted_types=missing_types)
+            if artwork:
+                saved = save_grid_images(short_id, artwork, grid_path)
+                total_downloaded += len(saved)
+                missing_after = missing_types - set(saved.keys())
+                if missing_after:
+                    total_failed += len(missing_after)
+                    print(f"  [{len(saved)} saved, {len(missing_after)} not found]")
+                else:
+                    print(f"  [{len(saved)} saved]")
+            else:
+                total_skipped += 1
+                print("  [no match]")
+        except Exception as e:
+            total_failed += 1
+            logging.debug(f"Scrape failed for {sc.appname}: {e}")
+            print(f"  [error: {e}]")
+
+    print()
+    print(f"  Results:")
+    print(f"    Downloaded:  {total_downloaded}")
+    print(f"    Not found:   {total_skipped}")
+    if total_failed:
+        print(f"    Failed:      {total_failed}")
+    print()
+    return 0
+
+
 def cmd_refresh(args: argparse.Namespace) -> int:
     """Refresh images from SteamGridDB API."""
     from config import config_exists, get_resolved_config
@@ -260,7 +388,17 @@ def cmd_refresh(args: argparse.Namespace) -> int:
     
     mode = 'all' if args.all else 'missing'
     image_type = getattr(args, 'type', None)
-    
+    do_shortcuts = getattr(args, 'shortcuts', False)
+
+    if do_shortcuts:
+        return _cmd_refresh_shortcuts(
+            config=config,
+            steam_path=steam_path,
+            grid_path=grid_path,
+            image_type=image_type,
+            dry_run=args.dry_run,
+        )
+
     return refresh_images(
         grid_path=grid_path,
         api_key=config['api_key'],
@@ -1292,18 +1430,218 @@ def cmd_import_bundle(args: argparse.Namespace) -> int:
 
     print(f"\nImporting bundle: {bundle_path}")
     print(f"Mode: {mode}")
+    if getattr(args, 'with_shortcuts', False):
+        print(f"Shortcuts: will be restored from bundle")
 
     imported, skipped, errors = import_bundle(
         bundle_path=bundle_path,
         grid_path=grid_path,
         mode=mode,
         dry_run=args.dry_run,
+        with_shortcuts=getattr(args, 'with_shortcuts', False),
     )
 
     print(f"\n  Imported: {imported}")
     print(f"  Skipped:  {skipped}")
     if errors:
         print(f"  Errors:   {errors}")
+    print()
+    return 0
+
+
+def cmd_heroic(args: argparse.Namespace) -> int:
+    """Handle `sgm heroic` — scan Heroic games and create Steam shortcuts with art."""
+    from config import config_exists, get_resolved_config
+    from steam import find_steam_path, find_grid_path
+    from shortcuts import (
+        read_shortcuts_vdf,
+        add_shortcuts,
+        generate_short_app_id,
+        generate_shortcut_id,
+        SteamShortcut,
+    )
+    from heroic import find_heroic_config, get_heroic_games, make_heroic_launch_options, is_heroic_flatpak
+    from art_scraper import CascadeScraper
+
+    dry_run = getattr(args, 'dry_run', False)
+    no_art = getattr(args, 'no_art', False)
+    runner_filter = getattr(args, 'runner', None)  # 'legendary', 'gog', 'nile', or None
+    list_only = getattr(args, 'list', False)
+
+    # --- Find Heroic config ---
+    heroic_config = find_heroic_config()
+    if heroic_config is None:
+        print("Error: Heroic Games Launcher not found.")
+        print("Looked in:")
+        from heroic import HEROIC_CONFIG_PATHS
+        for p in HEROIC_CONFIG_PATHS:
+            print(f"  {p}")
+        return 1
+
+    print(f"  Heroic config: {heroic_config}")
+
+    # --- Get installed games ---
+    games = get_heroic_games(heroic_config)
+    if runner_filter:
+        games = [g for g in games if g['runner'] == runner_filter]
+
+    if not games:
+        print(f"No Heroic games found{f' for runner: {runner_filter}' if runner_filter else ''}.")
+        return 0
+
+    # --- List mode ---
+    if list_only:
+        runners = {'legendary': 'Epic', 'gog': 'GOG', 'nile': 'Amazon'}
+        print(f"\n  Heroic Games ({len(games)} installed)\n")
+        for g in sorted(games, key=lambda x: x['title'].lower()):
+            store = runners.get(g['runner'], g['runner'])
+            print(f"  [{store:6s}] {g['title']}")
+        print()
+        return 0
+
+    # --- Resolve Steam paths ---
+    try:
+        if config_exists():
+            config = get_resolved_config()
+        else:
+            steam_path = find_steam_path()
+            config = {'steam_path': str(steam_path), 'steam_user_id': 'auto'}
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return 1
+
+    steam_path = Path(config['steam_path'])
+    user_id = config.get('steam_user_id', 'auto')
+    uid = user_id if user_id != 'auto' else None
+
+    try:
+        grid_path = find_grid_path(steam_path, uid)
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return 1
+
+    # --- Read existing shortcuts to skip already-imported games ---
+    vdf_path = grid_path.parent / 'shortcuts.vdf'
+    existing_shortcuts = read_shortcuts_vdf(vdf_path) if vdf_path.exists() else []
+    existing_names = {sc.appname.lower() for sc in existing_shortcuts}
+
+    flatpak = is_heroic_flatpak()
+    runners_label = {'legendary': 'Epic', 'gog': 'GOG', 'nile': 'Amazon'}
+
+    # --- Summary ---
+    print(f"\n  Heroic Import\n")
+    print(f"  Games found:  {len(games)}")
+    print(f"  Installation: {'Flatpak' if flatpak else 'Native'}")
+    print(f"  Grid folder:  {grid_path}")
+    print()
+
+    # --- Set up art scraper ---
+    scraper = None
+    if not no_art:
+        api_key = config.get('api_key', '')
+        if api_key:
+            try:
+                scraper = CascadeScraper(config)
+            except Exception as e:
+                logging.warning(f"Could not initialize art scraper: {e}")
+        else:
+            print("  [WARN] No API key configured — skipping artwork download.")
+            print("         Run: sgm config set api_key YOUR_KEY\n")
+
+    # --- Process games ---
+    added = 0
+    skipped_existing = 0
+    art_downloaded = 0
+    art_failed = 0
+    new_shortcuts: list[SteamShortcut] = []
+
+    for game in sorted(games, key=lambda x: x['title'].lower()):
+        title = game['title']
+        app_name = game['app_name']
+        runner = game['runner']
+        store = runners_label.get(runner, runner)
+
+        # Check if already exists
+        if title.lower() in existing_names:
+            skipped_existing += 1
+            logging.debug(f"Skipping (already exists): {title}")
+            continue
+
+        exe, launch_options = make_heroic_launch_options(app_name, runner, flatpak)
+        appid = generate_shortcut_id(exe, title)
+        short_id = generate_short_app_id(exe, title)
+
+        print(f"  [{store:6s}] {title}")
+
+        if not dry_run:
+            sc = SteamShortcut(
+                appid=appid,
+                appname=title,
+                exe=exe,
+                start_dir='',
+                launch_options=launch_options,
+                is_hidden=0,
+                allow_desktop_config=1,
+                allow_overlay=1,
+                openvr=0,
+                devkit=0,
+                devkit_override_app_id=0,
+                tags={0: 'Heroic'},
+                icon='',
+                last_play_time=0,
+            )
+            new_shortcuts.append(sc)
+
+            # Download art
+            if scraper:
+                from art_scraper import save_grid_images
+                suffix_map = {'tall': 'p', 'wide': '', 'hero': '_hero', 'logo': '_logo', 'icon': '_icon'}
+                missing_types = set()
+                for art_type, suffix in suffix_map.items():
+                    has = any(
+                        (grid_path / f"{short_id}{suffix}{ext}").exists()
+                        for ext in ('.png', '.jpg')
+                    )
+                    if not has:
+                        missing_types.add(art_type)
+
+                if missing_types:
+                    try:
+                        artwork = scraper.scrape_game(title, wanted_types=missing_types)
+                        if artwork:
+                            saved = save_grid_images(str(short_id), artwork, grid_path)
+                            art_downloaded += len(saved)
+                            if len(saved) < len(missing_types):
+                                art_failed += len(missing_types) - len(saved)
+                    except Exception as e:
+                        logging.debug(f"Art scrape failed for {title}: {e}")
+                        art_failed += len(missing_types)
+
+        added += 1
+
+    # --- Write shortcuts ---
+    if not dry_run and new_shortcuts:
+        added_count, skipped_count = add_shortcuts(
+            steam_path, new_shortcuts,
+            uid,
+            replace_existing=False,
+        )
+        print()
+        print(f"  [OK] Added {added_count} new shortcut(s) to shortcuts.vdf")
+
+    # --- Summary ---
+    print()
+    print(f"  Results:")
+    print(f"    Added:           {added}")
+    print(f"    Already exists:  {skipped_existing}")
+    if scraper and not no_art:
+        print(f"    Art downloaded:  {art_downloaded}")
+        if art_failed:
+            print(f"    Art failed:      {art_failed}")
+    if dry_run:
+        print(f"\n  (dry run — no changes made)")
+    else:
+        print(f"\n  Restart Steam to see the new entries in your library.")
     print()
     return 0
 
@@ -1340,6 +1678,8 @@ def main() -> int:
     sub_refresh = subparsers.add_parser('refresh', help='Refresh images from SteamGridDB')
     sub_refresh.add_argument('--all', action='store_true', help='Re-download everything')
     sub_refresh.add_argument('--missing', action='store_true', help='Only download missing (default)')
+    sub_refresh.add_argument('--shortcuts', action='store_true',
+                             help='Scrape art for non-ROM shortcuts (Heroic, flatpaks, other games) that are missing art')
     sub_refresh.add_argument('--type', choices=['tall', 'wide', 'hero', 'logo', 'icon'], 
                             help='Only refresh specific type')
     sub_refresh.add_argument('--dry-run', action='store_true', help='Show what would be downloaded')
@@ -1457,8 +1797,19 @@ def main() -> int:
     sub_import.add_argument('--replace', action='store_true', help='Overwrite existing images')
     sub_import.add_argument('--missing', action='store_true', help='Only import missing art types')
     sub_import.add_argument('--dry-run', action='store_true', help='Show what would be imported')
+    sub_import.add_argument('--with-shortcuts', action='store_true',
+                            help='Also restore shortcuts.vdf from bundle (for cross-device restore)')
     sub_import.set_defaults(func=cmd_import_bundle)
-    
+
+    # heroic (Heroic Games Launcher integration)
+    sub_heroic = subparsers.add_parser('heroic', help='Import Heroic Games as Steam shortcuts')
+    sub_heroic.add_argument('--list', action='store_true', help='List installed Heroic games without importing')
+    sub_heroic.add_argument('--runner', choices=['legendary', 'gog', 'nile'],
+                            help='Only process one store (legendary=Epic, gog=GOG, nile=Amazon)')
+    sub_heroic.add_argument('--no-art', action='store_true', help='Skip artwork download')
+    sub_heroic.add_argument('--dry-run', action='store_true', help='Show what would be added without making changes')
+    sub_heroic.set_defaults(func=cmd_heroic)
+
     args = parser.parse_args()
     
     if not args.command:
