@@ -318,106 +318,418 @@ def cmd_rom_art(args: argparse.Namespace) -> int:
     """Handle `sgm rom art` subcommands."""
     art_action = getattr(args, 'rom_art_action', None)
 
+    if art_action == 'remap':
+        return _cmd_rom_art_remap(args)
+
+    if art_action == 'fix-mount':
+        return _cmd_rom_art_fix_mount(args)
+
     if art_action == 'clear':
-        from config import config_exists, get_resolved_config
-        from steam import find_steam_path, find_grid_path
-        from rom_scanner import scan_rom_folder, scan_all_systems
-        from systems import get_system
-        from shortcuts import generate_shortcut_id, generate_short_app_id
+        return _cmd_rom_art_clear(args)
 
-        try:
-            if config_exists():
-                config = get_resolved_config()
-                steam_path = Path(config['steam_path'])
-                user_id = config.get('steam_user_id', 'auto')
-            else:
-                steam_path = find_steam_path()
-                user_id = 'auto'
-        except FileNotFoundError as e:
-            print(f"Error: {e}")
-            return 1
+    print("Usage: sgm rom art <clear|remap|fix-mount> [options]")
+    return 1
 
-        try:
-            grid_path = find_grid_path(steam_path, user_id if user_id != 'auto' else None)
-        except FileNotFoundError as e:
-            print(f"Error: {e}")
-            return 1
 
-        rom_path = Path(args.path)
-        if not rom_path.exists():
-            print(f"Error: ROM path not found: {rom_path}")
-            return 1
+def _cmd_rom_art_remap(args: argparse.Namespace) -> int:
+    """Rename grid art files from old SRM appids to current SGM appids.
 
-        # Scan ROMs to find short IDs
-        if args.system:
-            sys_def = get_system(args.system)
-            if not sys_def:
-                print(f"Error: Unknown system '{args.system}'")
-                return 1
-            roms = scan_rom_folder(args.system, rom_path / args.system, sys_def)
-            all_roms = {args.system: roms} if roms else {}
-        else:
-            all_roms = scan_all_systems(rom_path)
+    Reads an old shortcuts.vdf (typically a SRM backup) to discover the old
+    app-IDs, then maps each game to its current SGM-format app-ID and renames
+    the art files in the grid folder accordingly.  No API calls needed.
+    """
+    from config import config_exists, get_resolved_config
+    from steam import find_steam_path, find_grid_path
+    from shortcuts import (
+        read_shortcuts_vdf,
+        generate_short_app_id,
+        SteamShortcut,
+    )
 
-        if not all_roms:
-            print("No ROMs found.")
-            return 0
+    backup_file = Path(args.backup)
+    if not backup_file.exists():
+        print(f"Error: backup file not found: {backup_file}")
+        return 1
 
-        title_filter = (args.game or "").lower()
+    # Resolve grid path
+    cfg = get_resolved_config() if config_exists() else {}
+    steam_path_cfg = cfg.get('steam_path', '')
+    user_id = cfg.get('steam_user_id', 'auto')
+    try:
+        sp = find_steam_path()
+        grid_path = find_grid_path(sp, user_id if user_id != 'auto' else None)
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return 1
 
-        _art_suffixes = (".png", ".jpg", "p.png", "p.jpg",
-                         "_hero.png", "_hero.jpg",
-                         "_logo.png", "_logo.jpg",
-                         "_icon.png", "_icon.jpg")
+    # Read old shortcuts
+    old_shortcuts = read_shortcuts_vdf(backup_file)
+    print(f"Read {len(old_shortcuts)} shortcuts from {backup_file.name}")
 
-        to_delete: list[Path] = []
+    # Read current shortcuts to get the correct exe format per game
+    vdf_path = grid_path.parent / 'shortcuts.vdf'
+    current_shortcuts = read_shortcuts_vdf(vdf_path) if vdf_path.exists() else []
+    # Build lookup: appname -> list of current shortcuts
+    current_by_name: dict[str, list[SteamShortcut]] = {}
+    for sc in current_shortcuts:
+        current_by_name.setdefault(sc.appname, []).append(sc)
 
-        for system, roms in sorted(all_roms.items()):
-            sys_def = get_system(system)
-            if not sys_def:
-                continue
-            for rom in roms:
-                if title_filter and title_filter not in rom.steam_title.lower():
-                    continue
+    art_suffixes = [
+        'p.png', 'p.jpg', '.png', '.jpg',
+        '_hero.png', '_hero.jpg',
+        '_logo.png', '_logo.jpg',
+        '_icon.png', '_icon.jpg',
+    ]
 
-                exe = sys_def.emulator.get_executable()
-                launch_opts = sys_def.emulator.get_launch_options(str(rom.path))
-                if not exe.startswith('"'):
-                    exe = f'"{exe}"'
+    renames: list[tuple[Path, Path]] = []
+    skipped_no_art = 0
+    skipped_same_id = 0
+    skipped_no_new = 0
+    skipped_conflict = 0
 
-                short_id = generate_short_app_id(exe, rom.steam_title)
+    for old_sc in old_shortcuts:
+        old_short = generate_short_app_id(old_sc.exe, old_sc.appname)
 
-                for suffix in _art_suffixes:
-                    img = grid_path / f"{short_id}{suffix}"
-                    if img.exists() or img.is_symlink():
-                        to_delete.append(img)
+        # Find the matching current shortcut for this game
+        candidates = current_by_name.get(old_sc.appname, [])
+        if not candidates:
+            skipped_no_new += 1
+            continue
 
-        if not to_delete:
-            print("No art files found to remove.")
-            return 0
+        # Prefer candidate whose tag matches the old one, otherwise take first
+        old_tag = list(old_sc.tags.values())[0] if old_sc.tags else ''
+        new_sc = candidates[0]
+        for c in candidates:
+            c_tag = list(c.tags.values())[0] if c.tags else ''
+            if c_tag == old_tag:
+                new_sc = c
+                break
 
-        print(f"\n{'[DRY RUN] Would remove' if args.dry_run else 'Removing'} "
-              f"{len(to_delete)} art file(s):\n")
+        new_short = generate_short_app_id(new_sc.exe, new_sc.appname)
 
-        removed = 0
-        for img in sorted(to_delete):
-            print(f"  {img.name}")
-            if not args.dry_run:
-                try:
-                    img.unlink()
-                    removed += 1
-                except OSError as e:
-                    print(f"    Error: {e}")
+        if old_short == new_short:
+            skipped_same_id += 1
+            continue
 
-        if args.dry_run:
-            print(f"\n(dry run — nothing deleted)\n")
-        else:
-            print(f"\nRemoved {removed} file(s).\n")
+        # Determine whether this old appid has any art at all
+        has_any_art = any(
+            (grid_path / f"{old_short}{s}").exists() or
+            (grid_path / f"{old_short}{s}").is_symlink()
+            for s in art_suffixes
+        )
+        if not has_any_art:
+            skipped_no_art += 1
+            continue
 
+        # Collect per-suffix renames
+        for suffix in art_suffixes:
+            old_file = grid_path / f"{old_short}{suffix}"
+            new_file = grid_path / f"{new_short}{suffix}"
+
+            if not old_file.exists() and not old_file.is_symlink():
+                continue  # no art for this type
+
+            if new_file.exists() and not getattr(args, 'overwrite', False):
+                skipped_conflict += 1
+                continue  # new appid already has art, keep it
+
+            renames.append((old_file, new_file))
+
+    if not renames:
+        print("Nothing to rename.")
+        print(f"  Same appid already:       {skipped_same_id}")
+        print(f"  No matching new shortcut: {skipped_no_new}")
+        print(f"  No art under old appid:   {skipped_no_art}")
+        if skipped_conflict:
+            print(f"  New appid already has art (use --overwrite to replace): {skipped_conflict}")
         return 0
 
-    print("Usage: sgm rom art <clear> [options]")
-    return 1
+    verb = "[DRY RUN] Would rename" if args.dry_run else "Renaming"
+    print(f"\n{verb} {len(renames)} art file(s)...")
+
+    renamed = 0
+    errors = 0
+    for old_file, new_file in sorted(renames):
+        if getattr(args, 'verbose', False):
+            print(f"  {old_file.name}  ->  {new_file.name}")
+        if not args.dry_run:
+            try:
+                old_file.rename(new_file)
+                renamed += 1
+            except OSError as e:
+                print(f"  Error renaming {old_file.name}: {e}")
+                errors += 1
+        else:
+            renamed += 1
+
+    if args.dry_run:
+        print(f"\n(dry run — nothing changed)")
+    else:
+        print(f"\nDone. Renamed {renamed} file(s){f', {errors} error(s)' if errors else ''}.")
+
+    print(f"\nStats:")
+    print(f"  Renamed:              {renamed}")
+    print(f"  Already same appid:   {skipped_same_id}")
+    print(f"  No matching shortcut: {skipped_no_new}")
+    print(f"  No old art found:     {skipped_no_art}")
+    if skipped_conflict:
+        print(f"  Skipped (conflict):   {skipped_conflict}  (use --overwrite to replace)")
+    return 0
+
+
+def _cmd_rom_art_fix_mount(args: argparse.Namespace) -> int:
+    """Rename grid art from old mount-path appids to current mount-path appids.
+
+    When the SD card mount point changes (e.g. /run/media/deck/primary ->
+    /run/media/primary), the shortcut app IDs change because they embed the
+    ROM path.  This command auto-detects the path change and renames the
+    art files without needing an old shortcuts.vdf backup.
+    """
+    from config import config_exists, get_resolved_config
+    from steam import find_steam_path, find_grid_path
+    from shortcuts import read_shortcuts_vdf, generate_short_app_id
+
+    cfg = get_resolved_config() if config_exists() else {}
+    user_id = cfg.get('steam_user_id', 'auto')
+    try:
+        sp = find_steam_path()
+        grid_path = find_grid_path(sp, user_id if user_id != 'auto' else None)
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return 1
+
+    vdf_path = grid_path.parent / 'shortcuts.vdf'
+    if not vdf_path.exists():
+        print(f"Error: shortcuts.vdf not found at {vdf_path}")
+        return 1
+
+    current_shortcuts = read_shortcuts_vdf(vdf_path)
+    print(f"Loaded {len(current_shortcuts)} shortcuts from shortcuts.vdf")
+
+    # Determine which old mount paths to try.
+    # Allow user to pass --old-mount; otherwise auto-detect by checking common variants.
+    old_mounts_arg = getattr(args, 'old_mount', None) or []
+    if isinstance(old_mounts_arg, str):
+        old_mounts_arg = [old_mounts_arg]
+
+    # Auto-build candidate old mounts from current exe paths:
+    # e.g. /run/media/primary -> /run/media/deck/primary
+    #      /run/media/primary -> /media/primary
+    current_mounts: set[str] = set()
+    for sc in current_shortcuts:
+        if '/run/media/' in sc.exe:
+            # Extract mount point: everything from /run/media/ up to /Roms/
+            import re
+            m = re.search(r'(/run/media/[^"]+?)/Roms/', sc.exe)
+            if m:
+                current_mounts.add(m.group(1))
+
+    if not current_mounts:
+        print("No ROM paths found in shortcuts.vdf — nothing to do.")
+        return 0
+
+    # Build default candidates: insert or remove 'deck/' component
+    auto_old: list[str] = []
+    for mount in current_mounts:
+        parts = mount.split('/')
+        # /run/media/PRIMARY -> /run/media/deck/PRIMARY
+        if 'deck' not in parts:
+            idx = parts.index('media')
+            variant = parts[:idx+1] + ['deck'] + parts[idx+1:]
+            auto_old.append('/'.join(variant))
+        # /run/media/deck/PRIMARY -> /run/media/PRIMARY
+        if 'deck' in parts:
+            variant = [p for p in parts if p != 'deck']
+            auto_old.append('/'.join(variant))
+
+    old_mounts = old_mounts_arg if old_mounts_arg else auto_old
+    print(f"Current mount(s): {sorted(current_mounts)}")
+    print(f"Trying old mount(s): {sorted(set(old_mounts))}")
+
+    art_suffixes = [
+        'p.png', 'p.jpg', '.png', '.jpg',
+        '_hero.png', '_hero.jpg',
+        '_logo.png', '_logo.jpg',
+        '_icon.png', '_icon.jpg',
+    ]
+
+    renames: list[tuple[Path, Path]] = []
+    skipped_same = 0
+    skipped_no_art = 0
+    skipped_conflict = 0
+
+    for sc in current_shortcuts:
+        new_short = generate_short_app_id(sc.exe, sc.appname)
+
+        # Try each old mount substitution to find existing art
+        for old_mount in set(old_mounts):
+            # Replace current mount with old mount in exe
+            old_exe = sc.exe
+            for cur_mount in current_mounts:
+                old_exe = old_exe.replace(cur_mount, old_mount)
+            if old_exe == sc.exe:
+                continue  # no substitution happened
+
+            old_short = generate_short_app_id(old_exe, sc.appname)
+            if old_short == new_short:
+                skipped_same += 1
+                continue
+
+            has_old_art = any(
+                (grid_path / f"{old_short}{s}").exists()
+                for s in art_suffixes
+            )
+            if not has_old_art:
+                continue  # try next old mount
+
+            # Found art under old mount — queue renames
+            for suffix in art_suffixes:
+                old_file = grid_path / f"{old_short}{suffix}"
+                new_file = grid_path / f"{new_short}{suffix}"
+                if not old_file.exists():
+                    continue
+                if new_file.exists() and not getattr(args, 'overwrite', False):
+                    skipped_conflict += 1
+                    continue
+                renames.append((old_file, new_file))
+            break  # found the right old mount, no need to try others
+        else:
+            skipped_no_art += 1
+
+    if not renames:
+        print("Nothing to rename.")
+        print(f"  Already same appid: {skipped_same}")
+        print(f"  No old art found:   {skipped_no_art}")
+        if skipped_conflict:
+            print(f"  Conflicts (use --overwrite): {skipped_conflict}")
+        return 0
+
+    verb = "[DRY RUN] Would rename" if args.dry_run else "Renaming"
+    print(f"\n{verb} {len(renames)} art file(s)...")
+
+    renamed = 0
+    errors = 0
+    for old_file, new_file in sorted(renames):
+        if getattr(args, 'verbose', False):
+            print(f"  {old_file.name}  ->  {new_file.name}")
+        if not args.dry_run:
+            try:
+                old_file.rename(new_file)
+                renamed += 1
+            except OSError as e:
+                print(f"  Error renaming {old_file.name}: {e}")
+                errors += 1
+        else:
+            renamed += 1
+
+    if args.dry_run:
+        print("(dry run — nothing changed)")
+    else:
+        print(f"\nDone. Renamed {renamed} file(s){f', {errors} error(s)' if errors else ''}.")
+
+    print(f"\nStats:")
+    print(f"  Renamed:        {renamed}")
+    print(f"  No old art:     {skipped_no_art}")
+    if skipped_conflict:
+        print(f"  Conflicts:      {skipped_conflict}  (use --overwrite to replace)")
+    return 0
+
+
+def _cmd_rom_art_clear(args: argparse.Namespace) -> int:
+    """Remove grid art for ROM games."""
+    from config import config_exists, get_resolved_config
+    from steam import find_steam_path, find_grid_path
+    from rom_scanner import scan_rom_folder, scan_all_systems
+    from systems import get_system
+    from shortcuts import generate_shortcut_id, generate_short_app_id
+
+    try:
+        if config_exists():
+            config = get_resolved_config()
+            steam_path = Path(config['steam_path'])
+            user_id = config.get('steam_user_id', 'auto')
+        else:
+            steam_path = find_steam_path()
+            user_id = 'auto'
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return 1
+
+    try:
+        grid_path = find_grid_path(steam_path, user_id if user_id != 'auto' else None)
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return 1
+
+    rom_path = Path(args.path)
+    if not rom_path.exists():
+        print(f"Error: ROM path not found: {rom_path}")
+        return 1
+
+    # Scan ROMs to find short IDs
+    if args.system:
+        sys_def = get_system(args.system)
+        if not sys_def:
+            print(f"Error: Unknown system '{args.system}'")
+            return 1
+        roms = scan_rom_folder(args.system, rom_path / args.system, sys_def)
+        all_roms = {args.system: roms} if roms else {}
+    else:
+        all_roms = scan_all_systems(rom_path)
+
+    if not all_roms:
+        print("No ROMs found.")
+        return 0
+
+    title_filter = (args.game or "").lower()
+
+    _art_suffixes = (".png", ".jpg", "p.png", "p.jpg",
+                     "_hero.png", "_hero.jpg",
+                     "_logo.png", "_logo.jpg",
+                     "_icon.png", "_icon.jpg")
+
+    to_delete: list[Path] = []
+
+    for system, roms in sorted(all_roms.items()):
+        sys_def = get_system(system)
+        if not sys_def:
+            continue
+        for rom in roms:
+            if title_filter and title_filter not in rom.steam_title.lower():
+                continue
+
+            exe = sys_def.emulator.get_steam_exe(str(rom.path))
+            short_id = generate_short_app_id(exe, rom.steam_title)
+
+            for suffix in _art_suffixes:
+                img = grid_path / f"{short_id}{suffix}"
+                if img.exists() or img.is_symlink():
+                    to_delete.append(img)
+
+    if not to_delete:
+        print("No art files found to remove.")
+        return 0
+
+    print(f"\n{'[DRY RUN] Would remove' if args.dry_run else 'Removing'} "
+          f"{len(to_delete)} art file(s):\n")
+
+    removed = 0
+    for img in sorted(to_delete):
+        print(f"  {img.name}")
+        if not args.dry_run:
+            try:
+                img.unlink()
+                removed += 1
+            except OSError as e:
+                print(f"    Error: {e}")
+
+    if args.dry_run:
+        print(f"\n(dry run — nothing deleted)\n")
+    else:
+        print(f"\nRemoved {removed} file(s).\n")
+
+    return 0
+
 
 
 def cmd_rom(args: argparse.Namespace) -> int:
@@ -431,7 +743,7 @@ def cmd_rom(args: argparse.Namespace) -> int:
         SteamShortcut, get_existing_shortcuts, add_shortcuts,
     )
     from shortcuts import update_steam_collections
-    from art_scraper import ART_TYPES, CascadeScraper, save_grid_images
+    from art_scraper import ART_TYPES, CascadeScraper, save_grid_images, store_art_in_cache, DEFAULT_CACHE_DIR
 
     sub = args.rom_action
 
@@ -534,12 +846,12 @@ def cmd_rom(args: argparse.Namespace) -> int:
                 continue
 
             for rom in roms:
-                exe = sys_def.emulator.get_executable()
-                launch_opts = sys_def.emulator.get_launch_options(str(rom.path))
-
-                # Wrap exe in quotes for Steam
-                if not exe.startswith('"'):
-                    exe = f'"{exe}"'
+                # Build exe in SRM-compatible format:
+                #   '"/usr/bin/flatpak" run <emulator> [core_args] "/rom/path"'
+                # launch_options is intentionally empty.
+                # This matches SRM's shortcut format so existing grid art works.
+                exe = sys_def.emulator.get_steam_exe(str(rom.path))
+                launch_opts = ""
 
                 appid = generate_shortcut_id(exe, rom.steam_title)
                 short_id = generate_short_app_id(exe, rom.steam_title)
@@ -561,21 +873,26 @@ def cmd_rom(args: argparse.Namespace) -> int:
         # Add shortcuts to VDF
         print(f"\nAdding {len(new_shortcuts)} shortcuts to Steam...")
         shortcuts_only = [sc for sc, _, _, _ in new_shortcuts]
+        # Collect all tag names (current + legacy aliases) for systems being
+        # imported so we can purge old SRM-format entries (different app IDs
+        # due to exe format) and any entries using obsolete tag strings.
+        categories_being_imported: set[str] = set()
+        for _, _, sys_def, _ in new_shortcuts:
+            categories_being_imported.update(sys_def.all_category_tags())
         added, skipped = add_shortcuts(steam_path, shortcuts_only,
-                                      user_id if user_id != 'auto' else None)
-        # Always update launch_options for existing shortcuts (fixes wrong core paths)
-        if skipped > 0:
-            updated, _ = add_shortcuts(steam_path, shortcuts_only,
-                                       user_id if user_id != 'auto' else None,
-                                       replace_existing=True)
-            if updated > 0:
-                print(f"  Updated launch options for {updated} shortcuts")
-        print(f"  Added: {added}, Already existed: {skipped}")
+                                      user_id if user_id != 'auto' else None,
+                                      replace_existing=True,
+                                      remove_by_tags=categories_being_imported)
+        print(f"  Added: {added}")
 
         # Update Steam library collections in localconfig.vdf
         categories_to_ids: dict[str, list[int]] = {}
         for sc, rom, sys_def, short_id in new_shortcuts:
             cat = sys_def.get_steam_category()
+            # Use the unsigned short app ID — Steam's collection system expects
+            # unsigned 32-bit integers (positive), NOT the signed int32 stored in
+            # shortcuts.vdf.  short_id = generate_short_app_id() returns the correct
+            # unsigned value (sc.appid & 0xFFFFFFFF).
             categories_to_ids.setdefault(cat, []).append(int(short_id))
         uid = user_id if user_id != 'auto' else None
         update_steam_collections(steam_path, categories_to_ids, uid)
@@ -661,6 +978,10 @@ def cmd_rom(args: argparse.Namespace) -> int:
 
                     if artwork:
                         saved = save_grid_images(short_id, artwork, grid_path)
+                        # Store newly downloaded art in the persistent cache
+                        if saved:
+                            cache_dir = Path(cfg.get('art_cache_dir', '') or DEFAULT_CACHE_DIR).expanduser()
+                            store_art_in_cache(rom.clean_title, str(rom.system), saved, cache_dir=cache_dir)
                         n_saved = len(saved)
                         n_total = len(ART_TYPES)
                         art_bar = _bar(n_saved, n_total)
@@ -700,7 +1021,155 @@ def cmd_rom(args: argparse.Namespace) -> int:
         return 0
     elif sub == 'art':
         return cmd_rom_art(args)
+    elif sub == 'collections':
+        return _cmd_rom_collections(args)
 
+    return 0
+
+
+def _cmd_rom_collections(args: argparse.Namespace) -> int:
+    """Re-write Steam collections from the current shortcuts.vdf.
+
+    Reads all existing non-Steam shortcuts, groups them by their first tag
+    (which is the system/category name), then writes native ``uc-*`` collections
+    to cloud-storage-namespace-1.json.  Old ``srm-*`` collections are deleted.
+
+    This is useful after a ``rom import`` to apply collections without redoing
+    the full import, or to repair collections that Steam didn't pick up.
+    """
+    from config import config_exists, get_resolved_config
+    from steam import find_steam_path, find_grid_path
+    from shortcuts import (
+        read_shortcuts_vdf,
+        update_steam_collections,
+    )
+
+    cfg = get_resolved_config() if config_exists() else {}
+    steam_path_cfg = cfg.get('steam_path', '')
+    user_id = cfg.get('steam_user_id', 'auto')
+
+    try:
+        sp = find_steam_path()
+        grid_path = find_grid_path(sp, user_id if user_id != 'auto' else None)
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return 1
+
+    vdf_path = grid_path.parent / 'shortcuts.vdf'
+    if not vdf_path.exists():
+        print(f"Error: shortcuts.vdf not found at {vdf_path}")
+        return 1
+
+    shortcuts = read_shortcuts_vdf(vdf_path)
+    print(f"Read {len(shortcuts)} shortcuts from shortcuts.vdf")
+
+    # Group by first tag (= system category)
+    by_category: dict[str, list[int]] = {}
+    for sc in shortcuts:
+        tag = list(sc.tags.values())[0] if sc.tags else None
+        if tag:
+            by_category.setdefault(tag, []).append(sc.appid)
+
+    print(f"Found {len(by_category)} categories:")
+    for cat, ids in sorted(by_category.items()):
+        print(f"  {cat:<35} {len(ids):>4} games")
+
+    if args.dry_run:
+        print("\n(dry run — nothing written)")
+        return 0
+
+    ok = update_steam_collections(sp, by_category, user_id if user_id != 'auto' else None)
+    if ok:
+        total = sum(len(v) for v in by_category.values())
+        print(f"\n[OK] Wrote {len(by_category)} collections ({total} total memberships) to cloud storage.")
+    else:
+        print("\nError: failed to update collections.")
+        return 1
+    return 0
+
+
+def cmd_cache(args: argparse.Namespace) -> int:
+    """Handle `sgm cache` subcommands."""
+    cache_action = getattr(args, 'cache_action', None)
+
+    if cache_action == 'populate':
+        return _cmd_cache_populate(args)
+
+    if cache_action == 'stats':
+        return _cmd_cache_stats(args)
+
+    print("Usage: sgm cache <populate|stats>")
+    return 1
+
+
+def _cmd_cache_populate(args: argparse.Namespace) -> int:
+    """Scan existing grid art and store it in the persistent art cache."""
+    from config import config_exists, get_resolved_config
+    from steam import find_steam_path, find_grid_path
+    from shortcuts import read_shortcuts_vdf
+    from art_scraper import populate_cache_from_grid, DEFAULT_CACHE_DIR
+
+    cfg = get_resolved_config() if config_exists() else {}
+    user_id = cfg.get('steam_user_id', 'auto')
+    cache_dir_cfg = cfg.get('art_cache_dir', '')
+    cache_dir = Path(cache_dir_cfg).expanduser() if cache_dir_cfg else DEFAULT_CACHE_DIR
+
+    try:
+        sp = find_steam_path()
+        grid_path = find_grid_path(sp, user_id if user_id != 'auto' else None)
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return 1
+
+    vdf_path = grid_path.parent / 'shortcuts.vdf'
+    if not vdf_path.exists():
+        print(f"Error: shortcuts.vdf not found at {vdf_path}")
+        return 1
+
+    shortcuts = read_shortcuts_vdf(vdf_path)
+    print(f"Scanning {len(shortcuts)} shortcuts for existing art...")
+    print(f"Cache directory: {cache_dir}")
+
+    if args.dry_run:
+        # Just count without writing
+        from shortcuts import generate_short_app_id
+        would_cache = 0
+        for sc in shortcuts:
+            sid = generate_short_app_id(sc.exe, sc.appname)
+            has = any((grid_path / f"{sid}{s}").exists()
+                      for s in ['p.png','p.jpg','.png','.jpg','_hero.png','_hero.jpg',
+                                '_logo.png','_logo.jpg','_icon.png','_icon.jpg'])
+            if has:
+                would_cache += 1
+        print(f"[DRY RUN] Would cache art for {would_cache} games.")
+        return 0
+
+    cached = populate_cache_from_grid(shortcuts, grid_path, cache_dir=cache_dir)
+    print(f"Cached art for {cached} games into {cache_dir}")
+    return 0
+
+
+def _cmd_cache_stats(args: argparse.Namespace) -> int:
+    """Show art cache statistics."""
+    from art_scraper import DEFAULT_CACHE_DIR
+    from config import config_exists, get_resolved_config
+
+    cfg = get_resolved_config() if config_exists() else {}
+    cache_dir_cfg = cfg.get('art_cache_dir', '')
+    cache_dir = Path(cache_dir_cfg).expanduser() if cache_dir_cfg else DEFAULT_CACHE_DIR
+
+    if not cache_dir.exists():
+        print(f"Art cache is empty (directory does not exist): {cache_dir}")
+        return 0
+
+    entries = [d for d in cache_dir.iterdir() if d.is_dir()]
+    total_files = sum(len(list(e.iterdir())) for e in entries)
+    total_size = sum(f.stat().st_size for e in entries for f in e.iterdir() if f.is_file())
+
+    print(f"Art cache: {cache_dir}")
+    print(f"  Games cached:  {len(entries)}")
+    print(f"  Total files:   {total_files}")
+    print(f"  Total size:    {total_size / 1024 / 1024:0.1f} MB")
     return 0
 
 
@@ -921,11 +1390,59 @@ def main() -> int:
     rom_art_clear.add_argument('--game', '-g', help='Only clear art for games matching this title')
     rom_art_clear.add_argument('--dry-run', action='store_true',
                                help='Show what would be removed without deleting')
+    rom_art_remap = rom_art_sub.add_parser(
+        'remap', help='Rename art files from old SRM appids to current SGM appids')
+    rom_art_remap.add_argument(
+        '--backup', required=True,
+        help='Path to old shortcuts.vdf (SRM backup) containing original app IDs')
+    rom_art_remap.add_argument(
+        '--dry-run', action='store_true',
+        help='Show what would be renamed without making changes')
+    rom_art_remap.add_argument(
+        '--overwrite', action='store_true',
+        help='Overwrite new-appid art files that already exist')
+    rom_art_remap.add_argument(
+        '--verbose', '-v', action='store_true',
+        help='Print each rename operation')
+
+    rom_art_fix_mount = rom_art_sub.add_parser(
+        'fix-mount',
+        help='Rename art files after SD card mount path change (e.g. /media/deck/primary -> /media/primary)')
+    rom_art_fix_mount.add_argument(
+        '--old-mount', dest='old_mount', action='append', default=[],
+        metavar='PATH',
+        help='Old mount prefix to replace (auto-detected if not specified)')
+    rom_art_fix_mount.add_argument(
+        '--dry-run', action='store_true',
+        help='Show what would be renamed without making changes')
+    rom_art_fix_mount.add_argument(
+        '--overwrite', action='store_true',
+        help='Overwrite destination art files that already exist')
+    rom_art_fix_mount.add_argument(
+        '--verbose', '-v', action='store_true',
+        help='Print each rename operation')
 
     sub_rom.set_defaults(func=cmd_rom)
 
+    rom_collections = rom_sub.add_parser(
+        'collections', help='Re-write Steam collections from current shortcuts.vdf')
+    rom_collections.add_argument(
+        '--dry-run', action='store_true',
+        help='Show what would be written without making changes')
+
     # export
     sub_export = subparsers.add_parser('export', help='Export portable backup bundle')
+
+    # cache
+    sub_cache = subparsers.add_parser('cache', help='Manage the persistent art cache')
+    cache_sub = sub_cache.add_subparsers(dest='cache_action')
+    cache_populate = cache_sub.add_parser(
+        'populate', help='Seed art cache from existing grid folder art')
+    cache_populate.add_argument(
+        '--dry-run', action='store_true',
+        help='Show how many games would be cached without writing')
+    cache_sub.add_parser('stats', help='Show art cache statistics')
+    sub_cache.set_defaults(func=cmd_cache)
     export_sub = sub_export.add_subparsers(dest='export_action')
 
     export_create = export_sub.add_parser('create', help='Create export bundle')

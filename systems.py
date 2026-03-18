@@ -37,6 +37,34 @@ class EmulatorConfig:
         """Get launch options for a specific ROM."""
         return self.launch_args.replace("{rom}", rom_path)
 
+    def get_steam_exe(self, rom_path: str) -> str:
+        """Build the Steam shortcut ``exe`` field in SRM-compatible format.
+
+        Steam parses the ``exe`` field as::
+
+            "quoted_binary_path" [remaining args including rom]
+
+        Only the first ``"..."`` token is the actual binary.  Everything after
+        is treated as command-line arguments.  ``launch_options`` is appended
+        last.
+
+        We put the *entire* command including the ROM path in ``exe`` and leave
+        ``launch_options`` empty, exactly as Steam ROM Manager does.  This
+        means the computed app ID is ROM-path-dependent (same as SRM), so
+        existing SRM artwork images continue to display correctly.
+
+        Returns:
+            A string like::
+
+                '"/usr/bin/flatpak" run org.libretro.RetroArch -L /core.so "/rom"'
+        """
+        if self.flatpak_id:
+            args = self.launch_args.replace("{rom}", rom_path)
+            return f'"/usr/bin/flatpak" run {self.flatpak_id} {args}'
+        # Non-flatpak executable
+        args = self.launch_args.replace("{rom}", rom_path)
+        return f'"{self.emulator}" {args}'
+
 
 @dataclass
 class SystemDef:
@@ -51,6 +79,10 @@ class SystemDef:
     thegamesdb_id: Optional[str] = None
     # Category tag for Steam library
     steam_category: Optional[str] = None
+    # Legacy SRM/external tag names for this system.  Used when purging old
+    # shortcuts so that entries created by Steam ROM Manager or prior SGM
+    # versions (which used different tag strings) are also removed.
+    legacy_tags: Set[str] = field(default_factory=set)
     # Extensions to skip (save files, etc.)
     skip_extensions: Set[str] = field(default_factory=lambda: {
         ".srm", ".state", ".state1", ".state2", ".state3", ".state4",
@@ -87,6 +119,13 @@ class SystemDef:
         """Get the Steam library category for this system."""
         return self.steam_category or self.fullname
 
+    def all_category_tags(self) -> Set[str]:
+        """Return all tag strings to match when purging old shortcuts.
+
+        Includes the current category name plus any legacy aliases.
+        """
+        return {self.get_steam_category()} | self.legacy_tags
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # RetroArch core definitions (Flatpak)
@@ -94,13 +133,11 @@ class SystemDef:
 
 def _ra(core: str) -> EmulatorConfig:
     """Shorthand for RetroArch Flatpak with a given core."""
-    import os
-    cores_dir = os.path.expanduser("~/.var/app/org.libretro.RetroArch/config/retroarch/cores")
     return EmulatorConfig(
         emulator="retroarch",
         core=core,
         flatpak_id="org.libretro.RetroArch",
-        launch_args=f'-L {cores_dir}/{core}_libretro.so "{{rom}}"'
+        launch_args=f'-L /{core}_libretro.so "{{rom}}"'
     )
 
 
@@ -128,6 +165,7 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("fceumm"),
         screenscraper_id=3,
         thegamesdb_id="7",
+        legacy_tags={"NES"},
     ),
     "snes": SystemDef(
         name="snes",
@@ -137,6 +175,7 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("snes9x"),
         screenscraper_id=4,
         thegamesdb_id="6",
+        legacy_tags={"SNES"},
     ),
     "n64": SystemDef(
         name="n64",
@@ -155,6 +194,7 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("mgba"),
         screenscraper_id=9,
         thegamesdb_id="4",
+        legacy_tags={"GameBoy"},
     ),
     "gbc": SystemDef(
         name="gbc",
@@ -164,6 +204,7 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("mgba"),
         screenscraper_id=10,
         thegamesdb_id="41",
+        legacy_tags={"GBC", "GameBoy Color"},
     ),
     "gba": SystemDef(
         name="gba",
@@ -173,6 +214,7 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("mgba"),
         screenscraper_id=12,
         thegamesdb_id="5",
+        legacy_tags={"GBA", "GameBoy Advance"},
     ),
     "nds": SystemDef(
         name="nds",
@@ -182,6 +224,7 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("melondsds"),
         screenscraper_id=15,
         thegamesdb_id="8",
+        legacy_tags={"DS", "Nintendo DS"},
     ),
     "gamecube": SystemDef(
         name="gamecube",
@@ -190,10 +233,11 @@ SYSTEMS: Dict[str, SystemDef] = {
         extensions={".gcm", ".iso", ".gcz", ".ciso", ".wbfs", ".rvz", ".dol"},
         emulator=_standalone(
             "org.DolphinEmu.dolphin-emu",
-            '-e "{rom}"'
+            '-b -e "{rom}"'
         ),
         screenscraper_id=13,
         thegamesdb_id="2",
+        legacy_tags={"Gamecube"},
     ),
     "wii": SystemDef(
         name="wii",
@@ -202,7 +246,7 @@ SYSTEMS: Dict[str, SystemDef] = {
         extensions={".gcm", ".iso", ".gcz", ".ciso", ".wbfs", ".rvz", ".dol", ".wad"},
         emulator=_standalone(
             "org.DolphinEmu.dolphin-emu",
-            '-e "{rom}"'
+            '-b -e "{rom}"'
         ),
         screenscraper_id=16,
         thegamesdb_id="9",
@@ -214,7 +258,7 @@ SYSTEMS: Dict[str, SystemDef] = {
         extensions={".wud", ".wux", ".wua", ".rpx"},
         emulator=_standalone(
             "info.cemu.Cemu",
-            '-g "{rom}"'
+            '-f -g "{rom}"'
         ),
         screenscraper_id=18,
         thegamesdb_id="38",
@@ -229,6 +273,7 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("genesis_plus_gx"),
         screenscraper_id=1,
         thegamesdb_id="18",
+        legacy_tags={"Genesis/Mega Drive", "Mega Drive"},
     ),
     "mastersystem": SystemDef(
         name="mastersystem",
@@ -277,6 +322,7 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("mednafen_psx_hw"),
         screenscraper_id=57,
         thegamesdb_id="10",
+        legacy_tags={"PS1", "PlayStation 1"},
     ),
     "ps2": SystemDef(
         name="ps2",
@@ -286,10 +332,11 @@ SYSTEMS: Dict[str, SystemDef] = {
                     ".cso", ".chd", ".cue"},
         emulator=_standalone(
             "net.pcsx2.PCSX2",
-            '"{rom}"'
+            '"{rom}" -batch -fullscreen'
         ),
         screenscraper_id=58,
         thegamesdb_id="11",
+        legacy_tags={"PS2"},
     ),
     "psp": SystemDef(
         name="psp",
@@ -298,10 +345,11 @@ SYSTEMS: Dict[str, SystemDef] = {
         extensions={".iso", ".cso", ".pbp", ".chd"},
         emulator=_standalone(
             "org.ppsspp.PPSSPP",
-            '"{rom}"'
+            '"{rom}" --fullscreen'
         ),
         screenscraper_id=61,
         thegamesdb_id="13",
+        legacy_tags={"PSP"},
     ),
 
     # ─── Atari ──────────────────────────────────────────────────────
@@ -332,6 +380,7 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("prosystem"),
         screenscraper_id=41,
         thegamesdb_id="27",
+        legacy_tags={"7800"},
     ),
     "atarilynx": SystemDef(
         name="atarilynx",
@@ -355,6 +404,7 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("vice_x64sc"),
         screenscraper_id=66,
         thegamesdb_id="40",
+        legacy_tags={"C64"},
     ),
     "vic20": SystemDef(
         name="vic20",
@@ -407,6 +457,7 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("fbneo"),
         screenscraper_id=142,
         thegamesdb_id="24",
+        legacy_tags={"Neo Geo CD"},
     ),
     "arcade": SystemDef(
         name="arcade",
@@ -436,6 +487,7 @@ SYSTEMS: Dict[str, SystemDef] = {
         emulator=_ra("81"),  # No standard core; placeholder
         screenscraper_id=None,
         thegamesdb_id=None,
+        legacy_tags={"Interactive Fiction", "Infocom"},
     ),
     "zmachine": SystemDef(
         name="zmachine",
@@ -453,11 +505,9 @@ SYSTEMS: Dict[str, SystemDef] = {
         fullname="Xbox",
         manufacturer="Microsoft",
         extensions={".iso"},
-        emulator=EmulatorConfig(
-            emulator="xemu",
-            core=None,
-            flatpak_id=None,
-            launch_args='-dvd_path "{rom}"',
+        emulator=_standalone(
+            "app.xemu.xemu",
+            '-full-screen -dvd_path "{rom}"',
         ),
         screenscraper_id=32,
         thegamesdb_id="14",

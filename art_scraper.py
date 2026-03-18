@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import zlib
+import shutil
 import logging
 import time
 import urllib.parse
@@ -26,6 +27,108 @@ from typing import Dict, List, Optional, Set, Tuple, NamedTuple
 # ═══════════════════════════════════════════════════════════════════════
 # ROM Hashing
 # ═══════════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════════
+# Art Cache
+# ═══════════════════════════════════════════════════════════════════════
+
+DEFAULT_CACHE_DIR = Path.home() / ".local" / "share" / "sgm" / "art_cache"
+
+
+def _cache_key(title: str, system_name: str) -> str:
+    """Build a filesystem-safe cache directory name from title + system."""
+    raw = f"{system_name}::{title}"
+    # Hash to avoid filesystem issues with long/weird titles
+    h = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+    return h
+
+
+def get_cached_art(title: str, system_name: str,
+                   cache_dir: Optional[Path] = None) -> Dict[str, Path]:
+    """Return cached art files for a game, keyed by art_type.
+
+    Returns a dict like {'tall': Path(...), 'hero': Path(...), ...}.
+    Only returns types that are actually present in the cache.
+    """
+    base = cache_dir or DEFAULT_CACHE_DIR
+    game_cache = base / _cache_key(title, system_name)
+    if not game_cache.exists():
+        return {}
+    result: Dict[str, Path] = {}
+    for art_type in ART_TYPES:
+        for ext in (".png", ".jpg"):
+            p = game_cache / f"{art_type}{ext}"
+            if p.exists():
+                result[art_type] = p
+                break
+    return result
+
+
+def store_art_in_cache(title: str, system_name: str,
+                       art_files: Dict[str, Path],
+                       cache_dir: Optional[Path] = None) -> None:
+    """Copy downloaded/existing art files into the persistent cache.
+
+    Args:
+        title: Clean game title.
+        system_name: System name (e.g. 'snes').
+        art_files: Dict of art_type -> source Path.
+        cache_dir: Override default cache directory.
+    """
+    base = cache_dir or DEFAULT_CACHE_DIR
+    game_cache = base / _cache_key(title, system_name)
+    game_cache.mkdir(parents=True, exist_ok=True)
+    # Store a meta file so humans can grep the cache:
+    meta = game_cache / "meta.json"
+    if not meta.exists():
+        meta.write_text(json.dumps({"title": title, "system": system_name}))
+    for art_type, src in art_files.items():
+        if not src.exists():
+            continue
+        dst = game_cache / f"{art_type}{src.suffix}"
+        if not dst.exists():
+            shutil.copy2(src, dst)
+            logger.debug(f"Cached {art_type} for '{title}' ({system_name})")
+
+
+def populate_cache_from_grid(shortcuts, grid_path: Path,
+                              cache_dir: Optional[Path] = None) -> int:
+    """Scan existing grid art and populate the cache from matched shortcuts.
+
+    For each shortcut that has art in the grid folder, copies those files
+    into the art cache keyed by the shortcut's appname + system tag.
+    Returns number of games cached.
+    """
+    from shortcuts import generate_short_app_id  # local import to avoid circular
+    base = cache_dir or DEFAULT_CACHE_DIR
+    art_suffixes = {
+        "p.png": "tall", "p.jpg": "tall",
+        ".png": "wide",  ".jpg": "wide",
+        "_hero.png": "hero", "_hero.jpg": "hero",
+        "_logo.png": "logo", "_logo.jpg": "logo",
+        "_icon.png": "icon", "_icon.jpg": "icon",
+    }
+
+    cached_games = 0
+    for sc in shortcuts:
+        sid = generate_short_app_id(sc.exe, sc.appname)
+        # Determine system name from tags (first tag value) or empty string
+        system_name = ""
+        if sc.tags:
+            system_name = list(sc.tags.values())[0] if sc.tags else ""
+
+        art_files: Dict[str, Path] = {}
+        for suffix, art_type in art_suffixes.items():
+            p = grid_path / f"{sid}{suffix}"
+            if p.exists() and art_type not in art_files:
+                art_files[art_type] = p
+
+        if art_files:
+            store_art_in_cache(sc.appname, system_name, art_files, cache_dir=base)
+            cached_games += 1
+
+    return cached_games
+
 
 class RomHashes(NamedTuple):
     """ROM file hashes and size for ScreenScraper lookup."""
@@ -99,8 +202,8 @@ ART_TYPES = ["tall", "wide", "hero", "logo", "icon"]
 class ArtResult:
     """A single artwork image result from a provider."""
     url: str
-    art_type: str       # tall, wide, hero, logo, icon
-    provider: str       # screenscraper, thegamesdb, steamgriddb
+    art_type: str = ""  # tall, wide, hero, logo, icon
+    provider: str = ""  # screenscraper, thegamesdb, steamgriddb, cache
     width: int = 0
     height: int = 0
     mime_type: str = ""
@@ -117,6 +220,9 @@ class ArtResult:
             ext = ext_map.get(self.mime_type)
             if ext:
                 return ext
+        # For file:// URLs (cache), derive from path directly
+        if self.url.startswith("file://"):
+            return Path(self.url[7:]).suffix or ".png"
         # Fall back to URL extension
         parsed = urllib.parse.urlparse(self.url)
         ext = Path(parsed.path).suffix.lower()
@@ -690,7 +796,11 @@ class CascadeScraper:
         """
         self.providers: List = []
         self._init_providers(config)
-        self.cache_dir: Optional[Path] = None
+        cache_dir_cfg = config.get("art_cache_dir", "")
+        self.cache_dir: Path = (
+            Path(cache_dir_cfg).expanduser() if cache_dir_cfg
+            else DEFAULT_CACHE_DIR
+        )
 
     def _init_providers(self, config: dict):
         """Initialize providers from config."""
@@ -750,6 +860,25 @@ class CascadeScraper:
         results: Dict[str, ArtResult] = {}
         remaining = wanted_types.copy()
 
+        # ── Cache check ────────────────────────────────────────────────
+        cached = get_cached_art(title, system_name, cache_dir=self.cache_dir)
+        for art_type, cached_path in cached.items():
+            if art_type in remaining:
+                # Return a synthetic ArtResult pointing at the cached file
+                # Return a synthetic ArtResult pointing at the cached file
+                # using a file:// URL so callers don't need special handling.
+                results[art_type] = ArtResult(
+                    url=cached_path.as_uri(),
+                    art_type=art_type,
+                    provider="cache",
+                )
+                remaining.discard(art_type)
+                logger.debug(f"Cache hit: {art_type} for '{title}' ({system_name})")
+
+        if not remaining:
+            return results  # Everything served from cache
+        # ──────────────────────────────────────────────────────────────
+
         # Pre-compute hashes once (shared across retry logic)
         hashes: Optional[RomHashes] = None
         if rom_path is not None:
@@ -788,6 +917,13 @@ class CascadeScraper:
 
         if remaining:
             logger.debug(f"  Missing art types for '{title}': {remaining}")
+
+        # ── Store new downloads in cache ───────────────────────────────
+        # (only non-cache results, i.e. newly fetched URLs)
+        # These will be downloaded by save_grid_images; we can't store them
+        # here since we only have URLs. The caller (sgm.py) should call
+        # store_art_in_cache after save_grid_images succeeds.
+        # ──────────────────────────────────────────────────────────────
 
         return results
 
@@ -834,6 +970,17 @@ def download_image(url: str, output_path: Path, timeout: int = 30) -> bool:
         True if download succeeded.
     """
     try:
+        # Handle file:// URLs (cache hits — just copy the file)
+        if url.startswith("file://"):
+            src = Path(url[7:])
+            if not src.exists():
+                logger.warning(f"Cached file missing: {src}")
+                return False
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, output_path)
+            logger.debug(f"Copied from cache: {src} -> {output_path}")
+            return True
+
         body, status, headers = _http_get(url, timeout=timeout)
         if status != 200 or len(body) < 100:
             logger.warning(f"Download failed ({status}): {url}")
