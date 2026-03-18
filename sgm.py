@@ -130,7 +130,19 @@ def cmd_status(args: argparse.Namespace) -> int:
     api_key = config.get('api_key', '')
     api_status = "Configured" if api_key else "Not set (run 'sgm config init')"
     print(f"  API Key:   {api_status}")
-    
+
+    # Art cache stats
+    try:
+        from art_scraper import DEFAULT_CACHE_DIR
+        cache_dir = Path(config.get('art_cache_dir', '') or DEFAULT_CACHE_DIR).expanduser()
+        if cache_dir.exists():
+            cache_files = list(cache_dir.glob('*.json'))
+            print(f"  Art Cache: {len(cache_files)} game(s) cached")
+        else:
+            print(f"  Art Cache: Empty (populated during rom art scrape)")
+    except Exception:
+        pass
+
     # Auto-monitor
     from monitor import is_monitor_installed
     monitor_status = "Active" if is_monitor_installed() else "Not installed"
@@ -138,7 +150,6 @@ def cmd_status(args: argparse.Namespace) -> int:
     
     print()
     return 0
-
 
 def cmd_backup(args: argparse.Namespace) -> int:
     """Create a backup of the grid folder."""
@@ -366,11 +377,20 @@ def _cmd_refresh_shortcuts(
 
 
 def cmd_refresh(args: argparse.Namespace) -> int:
-    """Refresh images from SteamGridDB API."""
+    """Refresh / re-scrape artwork for all game types.
+
+    Covers all three populations in one pass unless filtered:
+      1. SRM-managed games  (artworkCache.json entries -> SteamGridDB)
+      2. Non-ROM shortcuts  (Heroic, Wine, flatpaks -> full cascade)
+      3. ROM shortcuts      (SGM-imported ROMs -> full cascade)
+
+    Filters: --srm-only, --shortcuts-only, --roms-only, --system X, --game NAME
+    Scope:   --all re-downloads even existing art; default = missing only
+    """
     from config import config_exists, get_resolved_config
     from steam import find_steam_path, find_grid_path
     from refresh import refresh_images
-    
+
     try:
         if config_exists():
             config = get_resolved_config()
@@ -380,44 +400,89 @@ def cmd_refresh(args: argparse.Namespace) -> int:
     except FileNotFoundError as e:
         print(f"Error: {e}")
         return 1
-    
+
     if not config.get('api_key'):
         print("Error: SteamGridDB API key required for refresh.")
         print("Run 'sgm config set api_key YOUR_KEY' or 'sgm config init'")
         print("Get a free key at: https://www.steamgriddb.com/profile/preferences/api")
         return 1
-    
+
     steam_path = Path(config['steam_path'])
     user_id = config.get('steam_user_id', 'auto')
-    
+
     try:
         grid_path = find_grid_path(steam_path, user_id if user_id != 'auto' else None)
     except FileNotFoundError as e:
         print(f"Error: {e}")
         return 1
-    
-    mode = 'all' if args.all else 'missing'
-    image_type = getattr(args, 'type', None)
-    do_shortcuts = getattr(args, 'shortcuts', False)
 
+    force_all   = getattr(args, 'all', False)
+    mode        = 'all' if force_all else 'missing'
+    image_type  = getattr(args, 'type', None)
+    system_filter = getattr(args, 'system', None)
+    game_filter   = getattr(args, 'game', None)
+    srm_only      = getattr(args, 'srm_only', False)
+    shortcuts_only = getattr(args, 'shortcuts_only', False)
+    roms_only     = getattr(args, 'roms_only', False)
+    dry_run       = args.dry_run
+
+    # Determine which populations to process
+    # --system or --game implies ROM scope; --shortcuts-only or --srm-only narrow further
+    do_srm       = not shortcuts_only and not roms_only
+    do_shortcuts = not srm_only and not roms_only and not system_filter and not game_filter
+    do_roms      = not srm_only and not shortcuts_only
+
+    if system_filter or game_filter or roms_only:
+        do_srm = False
+        do_shortcuts = False
+
+    overall_rc = 0
+
+    # ── Population 1: SRM artworkCache entries ──────────────────
+    if do_srm:
+        print(f"\n  ── SRM-managed art (artworkCache.json) ──")
+        rc = refresh_images(
+            grid_path=grid_path,
+            api_key=config['api_key'],
+            srm_cache_path=config.get('srm_artwork_cache', ''),
+            mode=mode,
+            image_type=image_type,
+            batch_size=config.get('batch_size', 50),
+            dry_run=dry_run,
+        )
+        if rc != 0:
+            overall_rc = rc
+
+    # ── Population 2: Non-ROM shortcuts (Heroic, Wine, flatpaks) ─
     if do_shortcuts:
-        return _cmd_refresh_shortcuts(
+        print(f"\n  ── Non-ROM shortcuts (Heroic / other) ──")
+        rc = _cmd_refresh_shortcuts(
             config=config,
             steam_path=steam_path,
             grid_path=grid_path,
             image_type=image_type,
-            dry_run=args.dry_run,
+            dry_run=dry_run,
         )
+        if rc != 0:
+            overall_rc = rc
 
-    return refresh_images(
-        grid_path=grid_path,
-        api_key=config['api_key'],
-        srm_cache_path=config.get('srm_artwork_cache', ''),
-        mode=mode,
-        image_type=image_type,
-        batch_size=config.get('batch_size', 50),
-        dry_run=args.dry_run,
-    )
+    # ── Population 3: ROM shortcuts ──────────────────────────────
+    if do_roms:
+        # Reuse the ROM art scrape logic by synthesising a compatible args object
+        class _RomArgs:
+            pass
+        rom_args = _RomArgs()
+        rom_args.system  = system_filter
+        rom_args.game    = game_filter
+        rom_args.all     = force_all
+        rom_args.dry_run = dry_run
+        if not (system_filter or game_filter):
+            print(f"\n  ── ROM shortcuts ──")
+        rc = _cmd_rom_art_scrape(rom_args)
+        if rc != 0:
+            overall_rc = rc
+
+    return overall_rc
 
 
 def cmd_config(args: argparse.Namespace) -> int:
@@ -1996,14 +2061,38 @@ def main() -> int:
     sub_restore.set_defaults(func=cmd_restore)
     
     # refresh
-    sub_refresh = subparsers.add_parser('refresh', help='Refresh images from SteamGridDB')
-    sub_refresh.add_argument('--all', action='store_true', help='Re-download everything')
-    sub_refresh.add_argument('--missing', action='store_true', help='Only download missing (default)')
-    sub_refresh.add_argument('--shortcuts', action='store_true',
-                             help='Scrape art for non-ROM shortcuts (Heroic, flatpaks, other games) that are missing art')
-    sub_refresh.add_argument('--type', choices=['tall', 'wide', 'hero', 'logo', 'icon'], 
-                            help='Only refresh specific type')
-    sub_refresh.add_argument('--dry-run', action='store_true', help='Show what would be downloaded')
+    sub_refresh = subparsers.add_parser(
+        'refresh',
+        help='Refresh / re-scrape artwork for all games (SRM + ROMs + shortcuts)',
+        description=(
+            'Re-downloads missing artwork for every game type in one pass.\n'
+            'Covers SRM-managed art, ROM shortcuts, and non-ROM shortcuts (Heroic, Wine, etc.).\n\n'
+            'Examples:\n'
+            '  sgm refresh               # re-scrape all missing art\n'
+            '  sgm refresh --all         # force re-download of ALL art\n'
+            '  sgm refresh --system c64  # only C64\n'
+            '  sgm refresh --game Contra # only games matching "Contra"\n'
+            '  sgm refresh --srm-only    # only SRM artworkCache entries\n'
+            '  sgm refresh --dry-run     # preview without downloading'
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub_refresh.add_argument('--all', action='store_true',
+                             help='Re-download all art even if files already exist')
+    sub_refresh.add_argument('--system', '-s', metavar='SYSTEM',
+                             help='Only refresh ROMs for this system (e.g. c64, atari2600)')
+    sub_refresh.add_argument('--game', '-g', metavar='GAME',
+                             help='Only refresh games whose name contains this text')
+    sub_refresh.add_argument('--srm-only', dest='srm_only', action='store_true',
+                             help='Only refresh SRM artworkCache entries (SteamGridDB only)')
+    sub_refresh.add_argument('--shortcuts-only', dest='shortcuts_only', action='store_true',
+                             help='Only refresh non-ROM shortcuts (Heroic, Wine, flatpaks)')
+    sub_refresh.add_argument('--roms-only', dest='roms_only', action='store_true',
+                             help='Only refresh ROM shortcuts (skip SRM and non-ROM)')
+    sub_refresh.add_argument('--type', choices=['tall', 'wide', 'hero', 'logo', 'icon'],
+                             help='Only refresh a specific art type')
+    sub_refresh.add_argument('--dry-run', action='store_true',
+                             help='Show what would be downloaded without making changes')
     sub_refresh.set_defaults(func=cmd_refresh)
     
     # config
@@ -2048,10 +2137,10 @@ def main() -> int:
 
     rom_art_scrape = rom_art_sub.add_parser(
         'scrape',
-        help='Scrape missing artwork for ROM shortcuts (retry failed art downloads)')
+        help='Scrape missing artwork for ROM shortcuts (alias for: sgm refresh --roms-only)')
     rom_art_scrape.add_argument(
         '--system', '-s',
-        help='Only scrape art for this system (e.g. nes, atari2600)')
+        help='Only scrape art for this system (e.g. c64, atari2600)')
     rom_art_scrape.add_argument(
         '--game', '-g',
         help='Only scrape art for games whose name contains this text')
@@ -2106,7 +2195,7 @@ def main() -> int:
         'remove', help='Remove all shortcuts and art for a system')
     rom_remove.add_argument(
         '--system', '-s', required=True,
-        help='System name to remove (e.g. atari2600, nes). Run "sgm rom systems" for names.')
+        help='System name to remove (e.g. atari2600, c64). Run "sgm rom systems" for names.')
     rom_remove.add_argument(
         '--yes', '-y', action='store_true',
         help='Skip confirmation prompt')

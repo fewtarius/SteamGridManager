@@ -69,10 +69,10 @@ class EmulatorConfig:
 @dataclass
 class SystemDef:
     """Complete system definition."""
-    name: str               # Folder name (e.g., "snes")
-    fullname: str           # Display name (e.g., "Super Nintendo")
-    manufacturer: str       # e.g., "Nintendo"
-    extensions: Set[str]    # Valid ROM extensions (e.g., {".sfc", ".smc"})
+    name: str               # Folder name (e.g., "c64")
+    fullname: str           # Display name (e.g., "Commodore 64")
+    manufacturer: str       # e.g., "Commodore"
+    extensions: Set[str]    # Valid ROM extensions (e.g., {".d64", ".prg"})
     emulator: EmulatorConfig
     # Platform IDs for scraping services
     screenscraper_id: Optional[int] = None
@@ -532,7 +532,7 @@ def get_system(folder_name: str) -> Optional[SystemDef]:
     """Look up a system definition by folder name.
 
     Args:
-        folder_name: The ROM folder name (e.g., "snes", "genesis").
+        folder_name: The ROM folder name (e.g., "c64", "amiga").
 
     Returns:
         SystemDef if found, None otherwise.

@@ -71,7 +71,7 @@ def store_art_in_cache(title: str, system_name: str,
 
     Args:
         title: Clean game title.
-        system_name: System name (e.g. 'snes').
+        system_name: System name (e.g. 'c64').
         art_files: Dict of art_type -> source Path.
         cache_dir: Override default cache directory.
     """

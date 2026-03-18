@@ -293,9 +293,9 @@ Each system is defined with:
 ```python
 @dataclass
 class SystemDef:
-    name: str               # Folder name (e.g., "snes")
-    fullname: str           # Display name (e.g., "Super Nintendo")
-    manufacturer: str       # "Nintendo", "Sega", etc.
+    name: str               # Folder name (e.g., "c64")
+    fullname: str           # Display name (e.g., "Commodore 64")
+    manufacturer: str       # "Commodore", "Atari", etc.
     extensions: list[str]   # Valid ROM file extensions
     screenscraper_id: int   # ScreenScraper platform ID (0 = unsupported)
     thegamesdb_id: int      # TheGamesDB platform ID (0 = unsupported)
@@ -488,10 +488,10 @@ python3 sgm.py restore --dry-run
 
 # 6. ROM scan test
 python3 sgm.py rom systems
-python3 sgm.py rom scan /run/media/primary/Roms --system snes
+python3 sgm.py rom scan /run/media/primary/Roms --system c64
 
 # 7. ROM import dry run
-python3 sgm.py rom import /run/media/primary/Roms --system nes --dry-run
+python3 sgm.py rom import /run/media/primary/Roms --system c64 --dry-run
 ```
 
 **Test Locations:**
