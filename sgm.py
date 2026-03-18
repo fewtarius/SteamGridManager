@@ -284,20 +284,30 @@ def _cmd_refresh_shortcuts(
     }
     suffix_map_filtered = {k: v for k, v in suffix_map.items() if k in wanted_types}
 
-    # Find which non-ROM shortcuts are missing art
+    # Find which non-ROM shortcuts are missing art.
+    # Use the appid already stored in shortcuts.vdf (as unsigned 32-bit) for the
+    # grid filename prefix — this matches whatever ID SRM/Steam already assigned,
+    # regardless of how generate_short_app_id() would compute it.
+    def grid_id_for(sc) -> str:
+        """Return the grid filename prefix for an existing shortcut."""
+        if sc.appid:
+            # appid is stored as signed 32-bit in VDF; convert to unsigned
+            return str(sc.appid & 0xFFFFFFFF)
+        return generate_short_app_id(sc.exe, sc.appname)
+
     to_scrape = []
     for sc in non_rom:
-        short_id = generate_short_app_id(sc.exe, sc.appname)
+        grid_id = grid_id_for(sc)
         missing_types = set()
         for art_type, suffix in suffix_map_filtered.items():
             has = any(
-                (grid_path / f"{short_id}{suffix}{ext}").exists()
+                (grid_path / f"{grid_id}{suffix}{ext}").exists()
                 for ext in ('.png', '.jpg')
             )
             if not has:
                 missing_types.add(art_type)
         if missing_types:
-            to_scrape.append((sc, short_id, missing_types))
+            to_scrape.append((sc, grid_id, missing_types))
 
     if not to_scrape:
         print("All non-ROM shortcuts already have artwork.")
