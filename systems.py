@@ -417,7 +417,7 @@ SYSTEMS: Dict[str, SystemDef] = {
                     ".nbz", ".zip"},
         emulator=_ra("vice_xvic"),
         screenscraper_id=73,
-        thegamesdb_id=None,  # No VIC-20 on TheGamesDB
+        thegamesdb_id="4945",
     ),
     "amiga": SystemDef(
         name="amiga",
@@ -466,7 +466,7 @@ SYSTEMS: Dict[str, SystemDef] = {
         extensions={".zip", ".7z"},
         emulator=_ra("mame2003_plus"),
         screenscraper_id=75,
-        thegamesdb_id=None,  # Arcade doesn't map cleanly
+        thegamesdb_id="23",
     ),
 
     # ─── PC / Interactive Fiction ───────────────────────────────────
@@ -477,7 +477,7 @@ SYSTEMS: Dict[str, SystemDef] = {
         extensions={".com", ".bat", ".exe", ".dosz"},
         emulator=_ra("dosbox_pure"),
         screenscraper_id=135,
-        thegamesdb_id=None,
+        thegamesdb_id="1",
     ),
     "infocom": SystemDef(
         name="infocom",

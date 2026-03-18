@@ -576,11 +576,14 @@ class TheGamesDBProvider:
         """
         self.api_key = api_key
         self.name = "thegamesdb"
-        self._base_url_cache: Dict[str, str] = {}
+        self._boxart_cache: Dict[str, dict] = {}  # game_id -> inline boxart from search
 
     def search_game(self, title: str,
                     thegamesdb_id: Optional[str] = None) -> Optional[GameMatch]:
         """Search for a game on TheGamesDB.
+
+        Uses include=boxart to get box art inline with the search result,
+        matching the approach used by EmulationStation/ROCKNIX.
 
         Args:
             title: Game title to search.
@@ -592,7 +595,8 @@ class TheGamesDBProvider:
         params = {
             "apikey": self.api_key,
             "name": title,
-            "fields": "platform",
+            "fields": "players,publishers,genres,overview,rating,platform",
+            "include": "boxart",
         }
         if thegamesdb_id:
             params["filter[platform]"] = thegamesdb_id
@@ -601,7 +605,19 @@ class TheGamesDBProvider:
         url = f"{self.API_BASE}/Games/ByGameName?{query}"
         data = _http_get_json(url)
 
-        if not data or data.get("code") != 200:
+        if not data:
+            return None
+
+        # Handle rate limit (monthly quota exhausted)
+        if data.get("code") == 429:
+            logger.warning(
+                f"TheGamesDB monthly API quota exhausted "
+                f"(resets in {data.get('allowance_refresh_timer', '?')}s). "
+                f"Skipping TheGamesDB for this session."
+            )
+            return None
+
+        if data.get("code") != 200:
             return None
 
         games = data.get("data", {}).get("games", [])
@@ -609,8 +625,14 @@ class TheGamesDBProvider:
             return None
 
         game = games[0]
+
+        # Cache the inline boxart for get_artwork() to use without a second API call
+        boxart_data = data.get("include", {}).get("boxart", {})
+        game_id_str = str(game.get("id", ""))
+        self._boxart_cache[game_id_str] = boxart_data
+
         return GameMatch(
-            game_id=str(game.get("id", "")),
+            game_id=game_id_str,
             title=game.get("game_title", title),
             provider=self.name,
             platform=str(game.get("platform", "")),
@@ -621,12 +643,64 @@ class TheGamesDBProvider:
     def get_artwork(self, game_id: str) -> Dict[str, ArtResult]:
         """Get artwork for a game by TheGamesDB game ID.
 
+        Uses cached inline boxart from search_game() if available.
+        Falls back to the /Games/Images endpoint for fan art and other types.
+
         Args:
             game_id: TheGamesDB game ID.
 
         Returns:
             Dict mapping art_type to ArtResult.
         """
+        results: Dict[str, ArtResult] = {}
+
+        # ── Use inline boxart if available from search ─────────────
+        boxart_data = self._boxart_cache.get(game_id, {})
+        base_url_map = boxart_data.get("base_url", {})
+        original_url = base_url_map.get("original", base_url_map.get("large", ""))
+        thumb_url = base_url_map.get("thumb", "")
+
+        game_images = boxart_data.get("data", {}).get(game_id, [])
+        if isinstance(game_images, dict):
+            game_images = list(game_images.values())
+
+        for image in game_images:
+            if not isinstance(image, dict):
+                continue
+            img_type = image.get("type", "")
+            side = image.get("side", "")
+            filename = image.get("filename", "")
+            if not filename:
+                continue
+            if img_type == "boxart" and side == "front" and "tall" not in results:
+                results["tall"] = ArtResult(
+                    url=original_url + filename,
+                    art_type="tall",
+                    provider=self.name,
+                )
+            elif img_type == "clearlogo" and "logo" not in results:
+                results["logo"] = ArtResult(
+                    url=original_url + filename,
+                    art_type="logo",
+                    provider=self.name,
+                )
+            elif img_type == "fanart" and "hero" not in results:
+                results["hero"] = ArtResult(
+                    url=original_url + filename,
+                    art_type="hero",
+                    provider=self.name,
+                )
+            elif img_type == "banner" and "wide" not in results:
+                results["wide"] = ArtResult(
+                    url=original_url + filename,
+                    art_type="wide",
+                    provider=self.name,
+                )
+
+        if len(results) == 5:
+            return results  # Got everything from inline data
+
+        # ── Fetch /Games/Images for remaining types ─────────────────
         params = {
             "apikey": self.api_key,
             "games_id": game_id,
@@ -635,18 +709,24 @@ class TheGamesDBProvider:
         url = f"{self.API_BASE}/Games/Images?{query}"
         data = _http_get_json(url)
 
-        if not data or data.get("code") != 200:
-            return {}
+        if not data:
+            return results
+
+        if data.get("code") == 429:
+            logger.warning("TheGamesDB monthly quota exhausted during image fetch.")
+            return results
+
+        if data.get("code") != 200:
+            return results
 
         # Get base URL for images
         base_url = data.get("data", {}).get("base_url", {})
-        original_url = base_url.get("original", "")
+        original_base = base_url.get("original", base_url.get("large", ""))
+        medium_base = base_url.get("medium", original_base)
 
         images = data.get("data", {}).get("images", {}).get(game_id, [])
         if isinstance(images, dict):
             images = list(images.values())
-
-        results: Dict[str, ArtResult] = {}
 
         # Type mapping: TheGamesDB type -> our art type
         type_map = {
@@ -660,26 +740,21 @@ class TheGamesDBProvider:
         for image in images:
             if not isinstance(image, dict):
                 continue
-
             img_type = image.get("type", "")
             side = image.get("side", "")
-
             # Only use front boxart
             if img_type == "boxart" and side != "front":
                 continue
-
             art_type = type_map.get(img_type)
             if not art_type or art_type in results:
                 continue
-
             filename = image.get("filename", "")
-            if filename and original_url:
+            base = medium_base if img_type == "fanart" else original_base
+            if filename and base:
                 results[art_type] = ArtResult(
-                    url=original_url + filename,
+                    url=base + filename,
                     art_type=art_type,
                     provider=self.name,
-                    width=image.get("width", 0),
-                    height=image.get("height", 0),
                 )
 
         return results
