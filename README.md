@@ -13,12 +13,12 @@ On SteamOS (Steam Deck), custom game images (capsules, heroes, logos, icons) liv
 ```bash
 sgm backup                                   # snapshot all grid images
 sgm restore                                  # restore after a Steam wipe
-sgm refresh --missing                        # re-download missing from SteamGridDB
+sgm refresh                                  # re-download ALL missing art (SRM + ROMs + shortcuts)
+sgm refresh --system c64                     # re-scrape missing art for C64 only
+sgm refresh --game "Contra"                  # re-scrape one specific game
 sgm monitor install                          # auto-restore when images are wiped
 sgm rom scan /path/to/Roms                   # scan game library
 sgm rom import /path/to/Roms                 # create shortcuts + download artwork
-sgm rom art scrape --system nes              # re-scrape missing art for a system
-sgm rom art scrape --game "Contra"           # re-scrape one specific game
 sgm rom remove --system atari2600            # remove a system's shortcuts + art
 sgm export create                            # portable bundle for another device
 ```
@@ -154,19 +154,25 @@ sgm restore --dry-run    # preview without restoring
 sgm restore --force      # skip confirmation prompt
 ```
 
-### `sgm refresh [--all|--missing|--shortcuts] [--type TYPE] [--dry-run]`
+### `sgm refresh [OPTIONS]`
 
-Re-download images from SteamGridDB using SRM artwork cache mappings.
+Re-download artwork for **all game types in one pass**: SRM-managed games, ROM shortcuts, and non-ROM shortcuts (Heroic, Wine, flatpaks). By default only missing art is downloaded.
 
 ```bash
-sgm refresh --missing        # only download missing images (default)
-sgm refresh --all            # re-download everything
-sgm refresh --shortcuts      # scrape art for non-ROM shortcuts (Heroic, flatpaks, other games)
-sgm refresh --type hero      # only refresh hero banners
-sgm refresh --dry-run        # preview without downloading
+sgm refresh                    # re-download all missing art (SRM + ROMs + shortcuts)
+sgm refresh --all              # force re-download even if art already exists
+sgm refresh --system c64       # only C64 ROMs
+sgm refresh --game "Contra"    # only games whose name contains "Contra"
+sgm refresh --type hero        # only hero banners, across all game types
+sgm refresh --srm-only         # only SRM artworkCache entries (SteamGridDB only)
+sgm refresh --shortcuts-only   # only non-ROM shortcuts (Heroic, Wine, flatpaks)
+sgm refresh --roms-only        # only ROM shortcuts (all systems)
+sgm refresh --dry-run          # preview what would be downloaded
 ```
 
-Requires a SteamGridDB API key.
+Three art providers are tried in cascade order for each game: **ScreenScraper → TheGamesDB → SteamGridDB**. Each art type (tall/wide/hero/logo/icon) is filled independently — if ScreenScraper has box art but no icon, SteamGridDB fills in the icon.
+
+Requires a SteamGridDB API key. ScreenScraper and TheGamesDB credentials are optional but recommended.
 
 ### `sgm heroic [--no-art] [--dry-run]`
 
@@ -212,14 +218,14 @@ sgm can scan a game library, create Steam shortcuts, and download artwork. This 
 
 ```bash
 sgm rom scan /path/to/Roms
-sgm rom scan /path/to/Roms --system snes    # scan one system only
+sgm rom scan /path/to/Roms --system c64    # scan one system only
 ```
 
 ### Import
 
 ```bash
 sgm rom import /path/to/Roms               # all systems
-sgm rom import /path/to/Roms --system nes   # one system
+sgm rom import /path/to/Roms --system c64   # one system
 sgm rom import /path/to/Roms --dry-run      # preview only
 sgm rom import /path/to/Roms --no-art       # skip artwork download
 ```
@@ -245,10 +251,10 @@ sgm expects ROMs organized by system folder name:
 
 ```
 Roms/
-+-- nes/
-|   +-- Game Title (USA).nes
-|   +-- Another Game (USA).nes
-+-- snes/
++-- c64/
+|   +-- Game Title (1984).d64
+|   +-- Another Game.d64
++-- amiga/
 |   +-- Game Title (USA).sfc
 +-- genesis/
 |   +-- Game Title (USA).md
@@ -284,13 +290,13 @@ Roms/
 | `n64` | Nintendo 64 | Nintendo |
 | `nds` | Nintendo DS | Nintendo |
 | `neogeo` | Neo Geo | SNK |
-| `nes` | NES | Nintendo |
+| `nes` | NES | Compatible |
 | `pc` | DOS | Microsoft |
 | `ps2` | PlayStation 2 | Sony |
 | `psp` | PlayStation Portable | Sony |
 | `psx` | PlayStation | Sony |
 | `saturn` | Saturn | Sega |
-| `snes` | Super Nintendo | Nintendo |
+| `snes` | Super Nintendo | Compatible |
 | `vic20` | VIC-20 | Commodore |
 | `wii` | Wii | Nintendo |
 | `wiiu` | Wii U | Nintendo |
@@ -310,26 +316,28 @@ sgm cleans ROM filenames automatically:
 ### ROM Artwork Tools
 
 ```bash
-# Re-scrape missing artwork (the most useful command when art didn't download)
-sgm rom art scrape --system nes                       # scrape all missing art for NES
-sgm rom art scrape --system nes --game "Contra"       # scrape one specific game
-sgm rom art scrape --all                              # re-scrape everything (all systems)
-sgm rom art scrape --system snes --all                # force re-download even if art exists
-sgm rom art scrape --dry-run                          # preview what would be scraped
+# Re-scrape missing artwork — recommended after 'rom import' if some art was missed
+sgm refresh --system c64                              # retry all missing art for C64
+sgm refresh --game "Contra"                           # retry one specific game
+sgm refresh --roms-only                               # retry all ROM systems
+sgm refresh --system c64 --all                       # force re-download even if art exists
+sgm refresh --dry-run                                 # preview what would be scraped
+
+# Low-level alias (same as sgm refresh --roms-only / --system):
+sgm rom art scrape --system c64
+sgm rom art scrape --game "Contra"
 
 # Other artwork utilities
-sgm rom art remap --old-shortcuts /path/to/old-shortcuts.vdf   # migrate art from SRM IDs to SGM IDs
-sgm rom art fix-mount --old-path /media/deck --new-path /media  # update art after SD card path change
-sgm rom art clear --system nes                                   # remove art for a system
-sgm rom art clear --all                                          # remove all ROM art
+sgm rom art remap --backup /path/to/old-shortcuts.vdf  # migrate art from SRM IDs to SGM IDs
+sgm rom art fix-mount --old-mount /media/deck           # update art after SD card path change
+sgm rom art clear --system c64                          # remove art for a system
 ```
 
-**Artwork scrape tips:**
-- If a game has no art after `rom import`, run `sgm rom art scrape --system <name>` to retry
-- Use `--game "partial name"` to scrape just one game: `sgm rom art scrape --game "Sonic"`
-- Three providers are tried in order: ScreenScraper → TheGamesDB → SteamGridDB
-- Each art type (tall/wide/hero/logo/icon) cascades independently — if ScreenScraper has box art but no icon, SteamGridDB fills in the icon
-
+**Artwork tips:**
+- `sgm refresh --dry-run` shows every game with missing art before downloading
+- `sgm refresh --game "partial name"` is the fastest way to retry one game
+- Three providers cascade per art type: **ScreenScraper -> TheGamesDB -> SteamGridDB**
+- Each art type (tall/wide/hero/logo/icon) is filled independently — if ScreenScraper has box art but no icon, SteamGridDB fills in the icon
 ### Remove a System
 
 Remove all shortcuts and artwork for an entire system:

@@ -189,6 +189,7 @@ def refresh_images(
     print(f"\n  Downloading...")
     downloaded = 0
     failed = 0
+    failures: list[str] = []
 
     for i, item in enumerate(queue):
         if i > 0 and i % batch_size == 0:
@@ -200,6 +201,7 @@ def refresh_images(
 
             if not artwork_id:
                 failed += 1
+                failures.append(f"  {item['art_type']:6s}  app:{item['app_id']}  (no artworkId in SRM cache)")
                 continue
 
             # Build the SGDB API URL
@@ -217,10 +219,12 @@ def refresh_images(
             data = _http_get_json(url, headers={"Authorization": f"Bearer {api_key}"})
             if not data:
                 failed += 1
+                failures.append(f"  {item['art_type']:6s}  app:{item['app_id']}  (API request failed)")
                 continue
 
             if not data.get('success') or not data.get('data'):
                 failed += 1
+                failures.append(f"  {item['art_type']:6s}  app:{item['app_id']}  (no results from SGDB)")
                 continue
 
             # Find the exact artwork ID; fall back to first result
@@ -234,6 +238,7 @@ def refresh_images(
 
             if not art_url:
                 failed += 1
+                failures.append(f"  {item['art_type']:6s}  app:{item['app_id']}  (no URL in response)")
                 continue
 
             ext = _ext_from_url(art_url)
@@ -244,15 +249,23 @@ def refresh_images(
                 downloaded += 1
             else:
                 failed += 1
+                failures.append(f"  {item['art_type']:6s}  app:{item['app_id']}  (download failed)")
 
         except Exception as e:
             logger.error(f"Unexpected error for {item.get('sgdb_game_id')}: {e}")
             failed += 1
+            failures.append(f"  {item['art_type']:6s}  app:{item['app_id']}  (error: {e})")
 
     print(f"\n  [OK] Refresh complete!")
     print(f"    Downloaded: {downloaded}")
     print(f"    Failed:     {failed}")
     print(f"    Skipped:    {len(queue) - downloaded - failed}")
+    if failures:
+        print(f"\n  Failed items:")
+        for msg in failures[:20]:
+            print(msg)
+        if len(failures) > 20:
+            print(f"  ... and {len(failures) - 20} more")
     print()
 
     return 0 if failed == 0 else 1
