@@ -1573,7 +1573,7 @@ def cmd_rom(args: argparse.Namespace) -> int:
                         saved = save_grid_images(short_id, artwork, grid_path)
                         # Store newly downloaded art in the persistent cache
                         if saved:
-                            cache_dir = Path(cfg.get('art_cache_dir', '') or DEFAULT_CACHE_DIR).expanduser()
+                            cache_dir = Path(config.get('art_cache_dir', '') or DEFAULT_CACHE_DIR).expanduser()
                             store_art_in_cache(rom.clean_title, str(rom.system), saved, cache_dir=cache_dir)
                         n_saved = len(saved)
                         n_total = len(ART_TYPES)
