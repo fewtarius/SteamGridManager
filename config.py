@@ -39,6 +39,7 @@ DEFAULT_CONFIG = {
     'batch_size': 50,
     'log_level': 'info',
     'log_file': str(LOG_FILE),
+    'vita3k_path': '',  # Vita3K data directory (auto-detected if empty)
 }
 
 
@@ -204,6 +205,15 @@ def show_config() -> None:
     print(f"   Restore Threshold: {config.get('auto_restore_threshold', 0.5)}")
     print(f"   Batch Size:        {config.get('batch_size', 50)}")
     print(f"   Log Level:         {config.get('log_level', 'info')}")
+    
+    # Vita3K path
+    from systems import find_vita3k_data_dir
+    vita3k_config = config.get('vita3k_path', '')
+    if vita3k_config:
+        print(f"   Vita3K Path:       {vita3k_config}")
+    else:
+        vita3k_detected = find_vita3k_data_dir()
+        print(f"   Vita3K Path:       {vita3k_detected or '(not found)'}")
 
 
 def set_config_value(key: str, value: str) -> None:
@@ -268,5 +278,12 @@ def get_resolved_config() -> dict:
         srm = find_srm_artwork_cache()
         if srm:
             config['srm_artwork_cache'] = str(srm)
+    
+    # Resolve Vita3K data path
+    if not config.get('vita3k_path'):
+        from systems import find_vita3k_data_dir
+        vita3k_dir = find_vita3k_data_dir()
+        if vita3k_dir:
+            config['vita3k_path'] = str(vita3k_dir)
     
     return config

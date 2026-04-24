@@ -22,10 +22,11 @@ logger = logging.getLogger(__name__)
 @dataclass
 class EmulatorConfig:
     """How to launch ROMs for this system."""
-    emulator: str           # "retroarch", "dolphin", "pcsx2", "ppsspp", "cemu"
+    emulator: str           # "retroarch", "dolphin", "pcsx2", "ppsspp", "cemu", "vita3k"
     core: Optional[str]     # RetroArch core name (without _libretro.so)
     flatpak_id: Optional[str]   # Flatpak app ID if applicable
-    launch_args: str        # Template with {rom} placeholder
+    launch_args: str        # Template with {rom} or {title_id} placeholder
+    launch_mode: str = "rom"  # "rom" (file path) or "title_id" (Vita3K-style)
 
     def get_executable(self) -> str:
         """Get the full executable path/command."""
@@ -57,10 +58,21 @@ class EmulatorConfig:
             A string like::
 
                 '"/usr/bin/flatpak" run org.libretro.RetroArch -L /core.so "/rom"'
+
+        For Vita3K title-ID mode, the ``{title_id}`` placeholder in
+        ``launch_args`` is replaced with the game's title ID (e.g.
+        ``PCSE00317``), and ``{rom}`` is replaced with the path to the
+        game's eboot.bin.  The ``exe`` field uses the title ID for
+        launching, not the ROM file path.
         """
         if self.flatpak_id:
             args = self.launch_args.replace("{rom}", rom_path)
             return f'"/usr/bin/flatpak" run {self.flatpak_id} {args}'
+        # Vita3K title-ID mode: replace both {title_id} and {rom}
+        if self.launch_mode == "title_id":
+            # rom_path for Vita3K is actually the title ID
+            args = self.launch_args.replace("{title_id}", rom_path).replace("{rom}", rom_path)
+            return f'"{self.emulator}" {args}'
         # Non-flatpak executable
         args = self.launch_args.replace("{rom}", rom_path)
         return f'"{self.emulator}" {args}'
@@ -83,6 +95,10 @@ class SystemDef:
     # shortcuts so that entries created by Steam ROM Manager or prior SGM
     # versions (which used different tag strings) are also removed.
     legacy_tags: Set[str] = field(default_factory=set)
+    # When True, games are installed app directories (not ROM files).
+    # The scanner reads subdirectories instead of files.  Used by PS Vita
+    # (Vita3K) where games live in ux0/app/<TITLE_ID>/ directories.
+    scan_as_dirs: bool = False
     # Extensions to skip (save files, etc.)
     skip_extensions: Set[str] = field(default_factory=lambda: {
         ".srm", ".state", ".state1", ".state2", ".state3", ".state4",
@@ -128,6 +144,133 @@ class SystemDef:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Vita3K Path Discovery
+# ═══════════════════════════════════════════════════════════════════════
+
+_VITA3K_BINARY: Optional[str] = None  # Cached binary path
+_VITA3K_DATA_DIR: Optional[Path] = None  # Cached data directory
+
+
+def _find_vita3k_binary() -> str:
+    """Find the Vita3K executable path.
+
+    Search order:
+    1. ``~/.config/Vita3K/Vita3K`` (default install location)
+    2. ``/usr/bin/Vita3K`` (system install)
+    3. ``/usr/local/bin/Vita3K`` (manual install)
+    4. ``Vita3K`` (fall back to PATH lookup)
+
+    Returns:
+        Path to Vita3K binary as a string.
+    """
+    global _VITA3K_BINARY
+    if _VITA3K_BINARY is not None:
+        return _VITA3K_BINARY
+
+    candidates = [
+        Path.home() / '.config' / 'Vita3K' / 'Vita3K',
+        Path('/usr/bin/Vita3K'),
+        Path('/usr/local/bin/Vita3K'),
+    ]
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            _VITA3K_BINARY = str(candidate)
+            return _VITA3K_BINARY
+
+    # Fall back to bare name (relies on PATH)
+    _VITA3K_BINARY = 'Vita3K'
+    return _VITA3K_BINARY
+
+
+def find_vita3k_data_dir() -> Optional[Path]:
+    """Find the Vita3K data directory containing installed games.
+
+    Search order:
+    1. ``pref-path`` from Vita3K's ``config.yml`` (if set)
+    2. ``~/.config/Vita3K/Vita3K/`` (default next to binary)
+    3. Common SD card mount points
+
+    When multiple candidates exist, prefers directories where
+    ``ux0/app/`` contains at least one valid game (directory with
+    ``eboot.bin``).
+
+    Returns:
+        Path to Vita3K data directory, or None if not found.
+    """
+    global _VITA3K_DATA_DIR
+    if _VITA3K_DATA_DIR is not None:
+        return _VITA3K_DATA_DIR
+
+    candidates: List[Path] = []
+
+    # 1. Check Vita3K config.yml for pref-path
+    config_path = Path.home() / '.config' / 'Vita3K' / 'config.yml'
+    if config_path.exists():
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    key, _, value = line.partition(':')
+                    if key.strip() == 'pref-path':
+                        pref = value.strip()
+                        if pref:
+                            pref_path = Path(pref).expanduser()
+                            if pref_path.exists():
+                                candidates.append(pref_path)
+        except Exception:
+            pass
+
+    # 2. ~/.local/share/Vita3K (standard XDG data dir, may be symlink to SD card)
+    local_share = Path.home() / '.local' / 'share' / 'Vita3K'
+    if local_share.exists() and (local_share / 'ux0').is_dir():
+        candidates.append(local_share)
+
+    # 3. Default location next to the binary
+    binary_dir = Path(_find_vita3k_binary()).parent
+    default_data = binary_dir / 'Vita3K'
+    if default_data.exists() and (default_data / 'ux0').is_dir():
+        candidates.append(default_data)
+
+    # Also check the binary's parent directory itself
+    if binary_dir.exists() and (binary_dir / 'ux0').is_dir():
+        candidates.append(binary_dir)
+
+    # 4. Common SD card locations (fallback)
+    sd_candidates = [
+        Path('/run/media/primary/Vita3K/Vita3K'),
+        Path('/run/media/deck/primary/Vita3K/Vita3K'),
+        Path('/run/media/primary/Vita3K'),
+        Path('/run/media/deck/primary/Vita3K'),
+    ]
+    for candidate in sd_candidates:
+        if candidate.exists() and (candidate / 'ux0').is_dir():
+            candidates.append(candidate)
+
+    # Pick the best candidate: prefer directories with actual game data
+    def _has_games(data_dir: Path) -> bool:
+        """Check if ux0/app/ contains at least one valid game."""
+        app_dir = data_dir / 'ux0' / 'app'
+        if not app_dir.is_dir():
+            return False
+        for entry in app_dir.iterdir():
+            if entry.is_dir() and (entry / 'eboot.bin').exists():
+                return True
+        return False
+
+    # Prefer candidates with actual games
+    for candidate in candidates:
+        if _has_games(candidate):
+            _VITA3K_DATA_DIR = candidate
+            return _VITA3K_DATA_DIR
+
+    # Fall back to first candidate without games check
+    if candidates:
+        _VITA3K_DATA_DIR = candidates[0]
+        return _VITA3K_DATA_DIR
+
+    return None
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # RetroArch core definitions (Flatpak)
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -148,6 +291,21 @@ def _standalone(flatpak_id: str, args: str) -> EmulatorConfig:
         core=None,
         flatpak_id=flatpak_id,
         launch_args=args,
+    )
+
+def _vita3k() -> EmulatorConfig:
+    """Shorthand for Vita3K PlayStation Vita emulator.
+
+    Vita3K launches games by title ID (e.g. PCSE00317), not by ROM file path.
+    The ``{title_id}`` placeholder in launch_args is replaced at runtime.
+    The emulator path is auto-discovered at import time.
+    """
+    return EmulatorConfig(
+        emulator=_find_vita3k_binary(),
+        core=None,
+        flatpak_id=None,
+        launch_args='-F -r "{title_id}"',
+        launch_mode="title_id",
     )
 
 
@@ -350,6 +508,18 @@ SYSTEMS: Dict[str, SystemDef] = {
         screenscraper_id=61,
         thegamesdb_id="13",
         legacy_tags={"PSP"},
+    ),
+    "psvita": SystemDef(
+        name="psvita",
+        fullname="PlayStation Vita",
+        manufacturer="Sony",
+        extensions={".vpk"},  # VPK packages (for manual install); installed apps scanned by title ID
+        emulator=_vita3k(),
+        screenscraper_id=62,
+        thegamesdb_id="39",
+        steam_category="PlayStation Vita",
+        legacy_tags={"PS Vita", "Vita", "PSVita"},
+        scan_as_dirs=True,  # Games are installed app directories in ux0/app/<TITLE_ID>/
     ),
 
     # ─── Atari ──────────────────────────────────────────────────────
