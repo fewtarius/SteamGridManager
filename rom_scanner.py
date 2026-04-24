@@ -7,6 +7,7 @@ and manages ROM metadata for import into Steam.
 
 import logging
 import re
+import struct
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -19,15 +20,16 @@ logger = logging.getLogger(__name__)
 @dataclass
 class RomEntry:
     """A single ROM file with extracted metadata."""
-    path: Path                          # Full path to ROM file
-    filename: str                       # Original filename
-    system: str                         # System folder name
-    raw_title: str                      # Title before cleaning
-    clean_title: str                    # Cleaned display title
-    extension: str                      # File extension
+    path: Path                              # Full path to ROM file or app directory
+    filename: str                           # Original filename or title ID
+    system: str                             # System folder name
+    raw_title: str                          # Title before cleaning
+    clean_title: str                        # Cleaned display title
+    extension: str                          # File extension (empty for dir-based games)
     is_multi_disc: bool = False         # Part of a multi-disc set
     disc_number: Optional[int] = None   # Disc number if multi-disc
-    region: Optional[str] = None        # Detected region (USA, EUR, JPN)
+    region: Optional[str] = None            # Detected region (USA, EUR, JPN)
+    title_id: Optional[str] = None          # PS Vita title ID (e.g. PCSE00317)
     tags: Set[str] = field(default_factory=set)  # Extracted tags [!], (Rev A), etc.
 
     @property
@@ -227,6 +229,11 @@ def scan_rom_folder(system_name: str, folder_path: Path,
                     system_def: Optional[SystemDef] = None) -> List[RomEntry]:
     """Scan a single system ROM folder for valid ROM files.
 
+    For PS Vita (``psvita``), this delegates to :func:`scan_vita3k_apps`
+    which reads installed game directories from the Vita3K data directory.
+    The ``folder_path`` argument is interpreted as the Vita3K data directory
+    (containing ``ux0/app/``), not a ROM folder.
+
     Args:
         system_name: System identifier (folder name).
         folder_path: Path to the ROM folder.
@@ -237,6 +244,14 @@ def scan_rom_folder(system_name: str, folder_path: Path,
     """
     if system_def is None:
         system_def = get_system(system_name)
+
+    # PS Vita uses installed app directories, not ROM files
+    if system_name == "psvita":
+        return scan_vita3k_apps(folder_path)
+
+    # For scan_as_dirs systems, also delegate to Vita3K scanner
+    if system_def and system_def.scan_as_dirs:
+        return scan_vita3k_apps(folder_path)
 
     if system_def is None:
         logger.warning(f"Unknown system: {system_name}")
@@ -373,6 +388,200 @@ def scan_all_systems(rom_root: Path) -> Dict[str, List[RomEntry]]:
         if roms:
             results[system_name] = roms
 
+    # Auto-detect Vita3K games even without a psvita folder in ROM root
+    if 'psvita' not in results:
+        from systems import find_vita3k_data_dir
+        vita3k_dir = find_vita3k_data_dir()
+        if vita3k_dir:
+            vita_roms = scan_vita3k_apps(vita3k_dir)
+            if vita_roms:
+                results['psvita'] = vita_roms
+
     total = sum(len(v) for v in results.values())
     logger.info(f"Scanned {len(results)} systems, found {total} total ROMs")
     return results
+
+# ═══════════════════════════════════════════════════════════════════════
+# PS Vita / Vita3K Scanner
+# ═══════════════════════════════════════════════════════════════════════
+
+# PS Vita title ID pattern: 4 uppercase letters + 5 digits (e.g. PCSE00317)
+_TITLE_ID_RE = re.compile(r'^[A-Z]{4}\d{5}$')
+
+
+def parse_sfo(path: Path) -> Optional[Dict[str, str]]:
+    """Parse a PlayStation SFO (System File Object) file.
+
+    SFO files are used by PS Vita (and PSP/PS3) to store game metadata
+    including the title, title ID, category, and version.
+
+    Args:
+        path: Path to the param.sfo file.
+
+    Returns:
+        Dictionary of key-value pairs, or None if parsing fails.
+    """
+    try:
+        with open(path, 'rb') as f:
+            data = f.read()
+    except OSError as e:
+        logger.debug(f"Cannot read SFO file {path}: {e}")
+        return None
+
+    # SFO header: magic (4 bytes) + version (4 bytes) + key_offset (4 bytes)
+    # + data_offset (4 bytes) + num_entries (4 bytes)
+    if len(data) < 0x14:
+        return None
+
+    magic = data[0:4]
+    if magic != b'\x00PSF':
+        logger.debug(f"Not an SFO file: {path}")
+        return None
+
+    try:
+        key_table_offset = struct.unpack_from('<I', data, 0x08)[0]
+        data_table_offset = struct.unpack_from('<I', data, 0x0C)[0]
+        num_entries = struct.unpack_from('<I', data, 0x10)[0]
+    except struct.error:
+        return None
+
+    result: Dict[str, str] = {}
+
+    for i in range(num_entries):
+        entry_offset = 0x14 + i * 0x10
+        if entry_offset + 0x10 > len(data):
+            break
+
+        key_name_offset = struct.unpack_from('<H', data, entry_offset)[0]
+        data_fmt = struct.unpack_from('<H', data, entry_offset + 0x02)[0]
+        data_len = struct.unpack_from('<I', data, entry_offset + 0x04)[0]
+        # data_max_len = struct.unpack_from('<I', data, entry_offset + 0x08)[0]
+        data_entry_offset = struct.unpack_from('<I', data, entry_offset + 0x0C)[0]
+
+        # Read key name (null-terminated string)
+        key_start = key_table_offset + key_name_offset
+        if key_start >= len(data):
+            continue
+        try:
+            key_end = data.index(b'\x00', key_start)
+            key = data[key_start:key_end].decode('utf-8', errors='replace')
+        except ValueError:
+            continue
+
+        # Read data value
+        actual_offset = data_table_offset + data_entry_offset
+        if actual_offset + data_len > len(data):
+            continue
+
+        if data_fmt & 0xFF == 0x04 or data_fmt == 0x0004:
+            # UTF-8 string (format 0x0004 or 0x0204)
+            raw = data[actual_offset:actual_offset + data_len]
+            value = raw.rstrip(b'\x00').decode('utf-8', errors='replace')
+        elif data_fmt & 0xFF == 0x02 or data_fmt == 0x0002:
+            # uint32 (format 0x0002 or 0x0404)
+            value = str(struct.unpack_from('<I', data, actual_offset)[0])
+        else:
+            # Unknown format, skip
+            continue
+
+        result[key] = value
+
+    return result
+
+
+def scan_vita3k_apps(vita3k_data_dir: Optional[Path] = None) -> List[RomEntry]:
+    """Scan installed Vita3K applications and return ROM entries.
+
+    Vita3K stores installed games in ``<data_dir>/ux0/app/<TITLE_ID>/``
+    directories.  Each game has a ``sce_sys/param.sfo`` file containing
+    the game title and metadata.
+
+    Args:
+        vita3k_data_dir: Path to Vita3K data directory.  If None,
+            auto-detected via :func:`systems.find_vita3k_data_dir`,
+            then falls back to the ``vita3k_path`` config key.
+
+    Returns:
+        List of RomEntry objects for installed PS Vita games.
+    """
+    from systems import find_vita3k_data_dir
+
+    if vita3k_data_dir is None:
+        # Try config first, then auto-detect
+        try:
+            from config import config_exists, load_config
+            if config_exists():
+                config = load_config()
+                config_path = config.get('vita3k_path', '')
+                if config_path:
+                    vita3k_data_dir = Path(config_path).expanduser()
+        except Exception:
+            pass
+
+        if vita3k_data_dir is None:
+            vita3k_data_dir = find_vita3k_data_dir()
+
+    if vita3k_data_dir is None:
+        logger.warning("Vita3K data directory not found. "
+                       "Set the vita3k_path config key or ensure Vita3K is installed.")
+        return []
+
+    app_dir = vita3k_data_dir / 'ux0' / 'app'
+    if not app_dir.is_dir():
+        logger.warning(f"Vita3K app directory not found: {app_dir}")
+        return []
+
+    roms: List[RomEntry] = []
+
+    for entry in sorted(app_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+
+        # Validate title ID format (e.g. PCSE00317, PCSB00123)
+        title_id = entry.name.upper()
+        if not _TITLE_ID_RE.match(title_id):
+            logger.debug(f"Skipping non-title-ID directory: {title_id}")
+            continue
+
+        # Check for eboot.bin (required for a valid game installation)
+        eboot = entry / 'eboot.bin'
+        if not eboot.exists():
+            logger.debug(f"Skipping {title_id}: no eboot.bin")
+            continue
+
+        # Try to read game title from param.sfo
+        sfo_path = entry / 'sce_sys' / 'param.sfo'
+        game_title = title_id  # Fall back to title ID
+        region = None
+
+        if sfo_path.exists():
+            sfo_data = parse_sfo(sfo_path)
+            if sfo_data:
+                sfo_title = sfo_data.get('TITLE', '')
+                if sfo_title:
+                    game_title = sfo_title
+                # Extract region from title ID prefix
+                # PCSA = Americas, PCSE = Americas digital, PCSB = Europe, etc.
+                tid_prefix = title_id[:4]
+                region_map = {
+                    'PCSA': 'USA', 'PCSE': 'USA',  # Americas
+                    'PCSB': 'EUR', 'PCSF': 'EUR',  # Europe
+                    'PCSC': 'JPN', 'PCSG': 'JPN',  # Japan
+                    'PCSD': 'ASA', 'PCSH': 'ASA',  # Asia
+                }
+                region = region_map.get(tid_prefix)
+
+        rom = RomEntry(
+            path=eboot,  # Path to eboot.bin for shortcut creation
+            filename=title_id,  # Use title ID as filename
+            system='psvita',
+            raw_title=game_title,
+            clean_title=game_title,
+            extension='',  # No file extension for installed apps
+            region=region,
+            title_id=title_id,
+        )
+        roms.append(rom)
+
+    logger.info(f"Found {len(roms)} Vita3K apps in {app_dir}")
+    return roms

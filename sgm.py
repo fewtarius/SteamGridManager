@@ -1343,7 +1343,17 @@ def cmd_rom(args: argparse.Namespace) -> int:
     # ── sgm rom scan ─────────────────────────────────────────────
     if sub == 'scan':
         rom_path = Path(args.path)
-        if not rom_path.is_dir():
+        # For PS Vita, the path is the Vita3K data directory (or auto-detected)
+        if args.system == 'psvita' and (not rom_path.is_dir() or not (rom_path / 'ux0' / 'app').is_dir()):
+            from systems import find_vita3k_data_dir
+            vita3k_dir = find_vita3k_data_dir()
+            if vita3k_dir:
+                rom_path = vita3k_dir
+            else:
+                print(f"Error: Vita3K data directory not found. "
+                       "Install Vita3K or set vita3k_path in config.")
+                return 1
+        elif not rom_path.is_dir():
             print(f"Error: ROM path not found: {rom_path}")
             return 1
 
@@ -1353,7 +1363,11 @@ def cmd_rom(args: argparse.Namespace) -> int:
                 print(f"Error: Unknown system '{args.system}'")
                 print(f"Supported: {', '.join(list_supported_systems())}")
                 return 1
-            roms = scan_rom_folder(args.system, rom_path / args.system, system_def)
+            # PS Vita scans installed apps, not a subfolder
+            if args.system == 'psvita':
+                roms = scan_rom_folder(args.system, rom_path, system_def)
+            else:
+                roms = scan_rom_folder(args.system, rom_path / args.system, system_def)
             all_roms = {args.system: roms} if roms else {}
         else:
             all_roms = scan_all_systems(rom_path)
@@ -1381,7 +1395,17 @@ def cmd_rom(args: argparse.Namespace) -> int:
     # ── sgm rom import ───────────────────────────────────────────
     elif sub == 'import':
         rom_path = Path(args.path)
-        if not rom_path.is_dir():
+        # For PS Vita, the path is the Vita3K data directory (or auto-detected)
+        if args.system == 'psvita' and (not rom_path.is_dir() or not (rom_path / 'ux0' / 'app').is_dir()):
+            from systems import find_vita3k_data_dir
+            vita3k_dir = find_vita3k_data_dir()
+            if vita3k_dir:
+                rom_path = vita3k_dir
+            else:
+                print(f"Error: Vita3K data directory not found. "
+                       "Install Vita3K or set vita3k_path in config.")
+                return 1
+        elif not rom_path.is_dir():
             print(f"Error: ROM path not found: {rom_path}")
             return 1
 
@@ -1410,7 +1434,11 @@ def cmd_rom(args: argparse.Namespace) -> int:
             if not system_def:
                 print(f"Error: Unknown system '{args.system}'")
                 return 1
-            roms = scan_rom_folder(args.system, rom_path / args.system, system_def)
+            # PS Vita scans installed apps, not a subfolder
+            if args.system == 'psvita':
+                roms = scan_rom_folder(args.system, rom_path, system_def)
+            else:
+                roms = scan_rom_folder(args.system, rom_path / args.system, system_def)
             all_roms = {args.system: roms} if roms else {}
         else:
             all_roms = scan_all_systems(rom_path)
@@ -1441,19 +1469,31 @@ def cmd_rom(args: argparse.Namespace) -> int:
             for rom in roms:
                 # Build exe in SRM-compatible format:
                 #   '"/usr/bin/flatpak" run <emulator> [core_args] "/rom/path"'
+                # For Vita3K: '"/path/to/Vita3K" -F -r "PCSE00317"'
                 # launch_options is intentionally empty.
                 # This matches SRM's shortcut format so existing grid art works.
-                exe = sys_def.emulator.get_steam_exe(str(rom.path))
+                # For title-ID-based systems (Vita3K), pass the title ID
+                # instead of the ROM file path.
+                if rom.title_id and sys_def.emulator.launch_mode == "title_id":
+                    exe = sys_def.emulator.get_steam_exe(rom.title_id)
+                else:
+                    exe = sys_def.emulator.get_steam_exe(str(rom.path))
                 launch_opts = ""
 
                 appid = generate_shortcut_id(exe, rom.steam_title)
                 short_id = generate_short_app_id(exe, rom.steam_title)
 
+                # For Vita3K, start_dir is the Vita3K binary directory
+                if rom.title_id and sys_def.emulator.launch_mode == "title_id":
+                    start_dir = f'"{Path(sys_def.emulator.emulator).parent}"'
+                else:
+                    start_dir = f'"{str(rom.path.parent)}"'
+
                 sc = SteamShortcut(
                     appid=appid,
                     appname=rom.steam_title,
                     exe=exe,
-                    start_dir=f'"{str(rom.path.parent)}"',
+                    start_dir=start_dir,
                     launch_options=launch_opts,
                     tags={"0": sys_def.get_steam_category()},
                 )

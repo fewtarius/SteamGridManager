@@ -265,6 +265,32 @@ Roms/
 +-- ...
 ```
 
+### PS Vita (Vita3K)
+
+PS Vita games work differently from other systems — they're installed apps, not ROM files. sgm scans your Vita3K installation directory and reads game titles from the built-in metadata.
+
+```bash
+# Auto-detect Vita3K and scan installed games
+sgm rom scan /path/to/Vita3K --system psvita
+
+# Import with artwork
+sgm rom import /path/to/Vita3K --system psvita
+
+# If the path is wrong, sgm auto-detects Vita3K's data directory
+sgm rom scan /any/path --system psvita
+```
+
+sgm auto-detects your Vita3K installation by checking:
+1. `vita3k_path` in config (if set)
+2. `pref-path` in Vita3K's `config.yml`
+3. Default location next to the Vita3K binary
+4. Common SD card mount points
+
+You can also set the path manually:
+```bash
+sgm config set vita3k_path /run/media/primary/Vita3K/Vita3K
+```
+
 ### Supported Systems
 
 | Folder | System | Manufacturer |
@@ -294,6 +320,7 @@ Roms/
 | `pc` | DOS | Microsoft |
 | `ps2` | PlayStation 2 | Sony |
 | `psp` | PlayStation Portable | Sony |
+| `psvita` | PlayStation Vita | Sony |
 | `psx` | PlayStation | Sony |
 | `saturn` | Saturn | Sega |
 | `snes` | Super Nintendo | Compatible |
