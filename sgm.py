@@ -1996,7 +1996,7 @@ def cmd_heroic_refresh(args: argparse.Namespace, games: list[dict], config: dict
     no_art_needed = 0
 
     for sc in sorted(heroic_shortcuts, key=lambda x: x.appname.lower()):
-        short_id = (sc.appid >> 32) & 0xFFFFFFFF
+        short_id = sc.appid & 0xFFFFFFFF
 
         # Check which art types exist
         missing_types = set()
@@ -2147,7 +2147,7 @@ def cmd_heroic(args: argparse.Namespace) -> int:
             game_lower = g['title'].lower()
             if game_lower in existing_by_name:
                 sc = existing_by_name[game_lower]
-                short_id = (sc.appid >> 32) & 0xFFFFFFFF
+                short_id = sc.appid & 0xFFFFFFFF
                 # Check which art types exist
                 missing_art = []
                 for art_type, suffix in suffix_map.items():
