@@ -1944,6 +1944,106 @@ def cmd_import_bundle(args: argparse.Namespace) -> int:
     return 0
 
 
+
+def cmd_heroic_refresh(args: argparse.Namespace, games: list[dict], config: dict, dry_run: bool, no_art: bool,
+                        runner_filter: str | None, flatpak: bool, scraper, grid_path: Path,
+                        existing_shortcuts: list, existing_names: set) -> int:
+    """Refresh artwork for existing Heroic shortcuts.
+
+    Matches existing shortcuts that have the Heroic tag, checks which art types
+    are missing, and downloads them via the art scraper.
+    """
+    from art_scraper import save_grid_images
+
+    suffix_map = {'tall': 'p', 'wide': '', 'hero': '_hero', 'logo': '_logo', 'icon': '_icon'}
+    runners_label = {'legendary': 'Epic', 'gog': 'GOG', 'nile': 'Amazon'}
+
+    # Filter to Heroic shortcuts only
+    heroic_shortcuts = [sc for sc in existing_shortcuts
+                         if sc.tags and any(v.lower() == 'heroic' for v in sc.tags.values())]
+
+    if not heroic_shortcuts:
+        print("\n  No existing Heroic shortcuts found.")
+        print("  Run 'sgm heroic' first to import your games.\n")
+        return 0
+
+    # Optionally filter by runner by matching against known Heroic games
+    if runner_filter:
+        # Build a set of known game titles for this runner
+        filtered_titles = {g['title'].lower() for g in games if g['runner'] == runner_filter}
+        heroic_shortcuts = [sc for sc in heroic_shortcuts if sc.appname.lower() in filtered_titles]
+
+    print(f"\n  Heroic Art Refresh\n")
+    print(f"  Shortcuts found: {len(heroic_shortcuts)}")
+    if runner_filter:
+        print(f"  Runner filter:   {runner_filter} ({runners_label.get(runner_filter, runner_filter)})")
+    print(f"  Grid folder:     {grid_path}")
+    print()
+
+    if no_art:
+        print("  [WARN] Skipping artwork (--no-art specified)\n")
+        return 0
+
+    if not scraper:
+        print("  [WARN] No API key configured — cannot download artwork.")
+        print("         Run: sgm config set api_key YOUR_KEY\n")
+        return 0
+
+    # Process each Heroic shortcut
+    art_downloaded = 0
+    art_failed = 0
+    refreshed = 0
+    no_art_needed = 0
+
+    for sc in sorted(heroic_shortcuts, key=lambda x: x.appname.lower()):
+        short_id = (sc.appid >> 32) & 0xFFFFFFFF
+
+        # Check which art types exist
+        missing_types = set()
+        for art_type, suffix in suffix_map.items():
+            has = any(
+                (grid_path / f"{short_id}{suffix}{ext}").exists()
+                for ext in ('.png', '.jpg')
+            )
+            if not has:
+                missing_types.add(art_type)
+
+        if not missing_types:
+            no_art_needed += 1
+            continue
+
+        refreshed += 1
+        print(f"  {sc.appname}")
+
+        if not dry_run:
+            try:
+                artwork = scraper.scrape_game(sc.appname, wanted_types=missing_types)
+                if artwork:
+                    saved = save_grid_images(str(short_id), artwork, grid_path)
+                    art_downloaded += len(saved)
+                    if len(saved) < len(missing_types):
+                        art_failed += len(missing_types) - len(saved)
+            except Exception as e:
+                logging.debug(f"Art scrape failed for {sc.appname}: {e}")
+                art_failed += len(missing_types)
+
+    print()
+    print(f"  Results:")
+    print(f"    Refreshed:      {refreshed}")
+    print(f"    Already complete: {no_art_needed}")
+    if not no_art:
+        print(f"    Art downloaded:  {art_downloaded}")
+        if art_failed:
+            print(f"    Art failed:     {art_failed}")
+    if dry_run:
+        print(f"\n  (dry run — no changes made)")
+    else:
+        notify_steam_reload()
+    print()
+    return 0
+
+
+
 def cmd_heroic(args: argparse.Namespace) -> int:
     """Handle `sgm heroic` — scan Heroic games and create Steam shortcuts with art."""
     from config import config_exists, get_resolved_config
@@ -1962,6 +2062,8 @@ def cmd_heroic(args: argparse.Namespace) -> int:
     no_art = getattr(args, 'no_art', False)
     runner_filter = getattr(args, 'runner', None)  # 'legendary', 'gog', 'nile', or None
     list_only = getattr(args, 'list', False)
+    refresh_mode = getattr(args, 'refresh', False)
+    force_mode = getattr(args, 'force', False)
 
     # --- Find Heroic config ---
     heroic_config = find_heroic_config()
@@ -1984,17 +2086,7 @@ def cmd_heroic(args: argparse.Namespace) -> int:
         print(f"No Heroic games found{f' for runner: {runner_filter}' if runner_filter else ''}.")
         return 0
 
-    # --- List mode ---
-    if list_only:
-        runners = {'legendary': 'Epic', 'gog': 'GOG', 'nile': 'Amazon'}
-        print(f"\n  Heroic Games ({len(games)} installed)\n")
-        for g in sorted(games, key=lambda x: x['title'].lower()):
-            store = runners.get(g['runner'], g['runner'])
-            print(f"  [{store:6s}] {g['title']}")
-        print()
-        return 0
-
-    # --- Resolve Steam paths ---
+    # --- Resolve Steam paths (needed for list mode with art status, refresh, and import) ---
     try:
         if config_exists():
             config = get_resolved_config()
@@ -2023,14 +2115,7 @@ def cmd_heroic(args: argparse.Namespace) -> int:
     flatpak = is_heroic_flatpak()
     runners_label = {'legendary': 'Epic', 'gog': 'GOG', 'nile': 'Amazon'}
 
-    # --- Summary ---
-    print(f"\n  Heroic Import\n")
-    print(f"  Games found:  {len(games)}")
-    print(f"  Installation: {'Flatpak' if flatpak else 'Native'}")
-    print(f"  Grid folder:  {grid_path}")
-    print()
-
-    # --- Set up art scraper ---
+    # --- Set up art scraper (needed for both refresh and import) ---
     scraper = None
     if not no_art:
         api_key = config.get('api_key', '')
@@ -2042,6 +2127,53 @@ def cmd_heroic(args: argparse.Namespace) -> int:
         else:
             print("  [WARN] No API key configured — skipping artwork download.")
             print("         Run: sgm config set api_key YOUR_KEY\n")
+
+    # --- Refresh mode: fix art for existing Heroic shortcuts ---
+    if refresh_mode:
+        return cmd_heroic_refresh(
+            args, games, config, dry_run, no_art, runner_filter,
+            flatpak, scraper, grid_path, existing_shortcuts, existing_names
+        )
+
+    # --- List mode ---
+    if list_only:
+        # Build name->shortcut map for art status check
+        existing_by_name = {sc.appname.lower(): sc for sc in existing_shortcuts}
+        suffix_map = {'tall': 'p', 'wide': '', 'hero': '_hero', 'logo': '_logo', 'icon': '_icon'}
+
+        print(f"\n  Heroic Games ({len(games)} installed)\n")
+        for g in sorted(games, key=lambda x: x['title'].lower()):
+            store = runners_label.get(g['runner'], g['runner'])
+            game_lower = g['title'].lower()
+            if game_lower in existing_by_name:
+                sc = existing_by_name[game_lower]
+                short_id = (sc.appid >> 32) & 0xFFFFFFFF
+                # Check which art types exist
+                missing_art = []
+                for art_type, suffix in suffix_map.items():
+                    has = any(
+                        (grid_path / f"{short_id}{suffix}{ext}").exists()
+                        for ext in ('.png', '.jpg')
+                    )
+                    if not has:
+                        missing_art.append(art_type)
+
+                if missing_art:
+                    art_status = f" [!missing: {', '.join(missing_art)}]"
+                else:
+                    art_status = " [OK]"
+                print(f"  [{store:6s}] {g['title']}{art_status}")
+            else:
+                print(f"  [{store:6s}] {g['title']} [not imported]")
+        print()
+        return 0
+
+    # --- Summary ---
+    print(f"\n  Heroic Import\n")
+    print(f"  Games found:  {len(games)}")
+    print(f"  Installation: {'Flatpak' if flatpak else 'Native'}")
+    print(f"  Grid folder:  {grid_path}")
+    print()
 
     # --- Process games ---
     added = 0
@@ -2058,9 +2190,11 @@ def cmd_heroic(args: argparse.Namespace) -> int:
 
         # Check if already exists
         if title.lower() in existing_names:
-            skipped_existing += 1
-            logging.debug(f"Skipping (already exists): {title}")
-            continue
+            if not force_mode:
+                skipped_existing += 1
+                logging.debug(f"Skipping (already exists): {title}")
+                continue
+            # With --force: process anyway (re-add or update)
 
         exe, launch_options = make_heroic_launch_options(app_name, runner, flatpak)
         appid = generate_shortcut_id(exe, title)
@@ -2357,6 +2491,10 @@ def main() -> int:
                             help='Only process one store (legendary=Epic, gog=GOG, nile=Amazon)')
     sub_heroic.add_argument('--no-art', action='store_true', help='Skip artwork download')
     sub_heroic.add_argument('--dry-run', action='store_true', help='Show what would be added without making changes')
+    sub_heroic.add_argument('--refresh', action='store_true',
+                            help='Refresh artwork for existing Heroic shortcuts (fix missing art)')
+    sub_heroic.add_argument('--force', action='store_true',
+                            help='Force re-import even if game already exists in shortcuts')
     sub_heroic.set_defaults(func=cmd_heroic)
 
     args = parser.parse_args()
