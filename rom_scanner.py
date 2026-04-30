@@ -388,8 +388,20 @@ def scan_all_systems(rom_root: Path) -> Dict[str, List[RomEntry]]:
         if roms:
             results[system_name] = roms
 
-    # Auto-detect Vita3K games even without a psvita folder in ROM root
-    if 'psvita' not in results:
+    # If no results and the root itself is a system folder (e.g. user pointed
+    # at /Roms/c64/ directly instead of /Roms/), scan it as a single system.
+    if not results:
+        root_system = get_system(rom_root.name.lower())
+        if root_system:
+            logger.debug(f"ROM root '{rom_root.name}' is a known system, scanning directly")
+            roms = scan_rom_folder(rom_root.name.lower(), rom_root, root_system)
+            if roms:
+                results[rom_root.name.lower()] = roms
+
+    # Only auto-detect Vita3K games when ROM root is not itself a known
+    # system folder. Otherwise pointing at /Roms/c64/ would silently import
+    # Vita3K games too, even though the user clearly targeted a specific system.
+    if 'psvita' not in results and not get_system(rom_root.name.lower()):
         from systems import find_vita3k_data_dir
         vita3k_dir = find_vita3k_data_dir()
         if vita3k_dir:
