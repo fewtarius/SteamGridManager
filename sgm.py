@@ -184,6 +184,47 @@ def cmd_backup(args: argparse.Namespace) -> int:
     return create_backup(grid_path, backup_path, dry_run=args.dry_run)
 
 
+def _rebuild_collections_after_restore(steam_path: Path, grid_path: Path, user_id: str) -> None:
+    """Rebuild Steam collections from the restored shortcuts.vdf tags.
+
+    After a restore, the grid images and shortcuts.vdf are back, but
+    Steam's collection data in cloud storage may still be wiped. This
+    reads the shortcut tags and recreates the collections.
+    """
+    from shortcuts import read_shortcuts_vdf, update_steam_collections
+
+    vdf_path = grid_path.parent / 'shortcuts.vdf'
+    if not vdf_path.exists():
+        return
+
+    try:
+        shortcuts = read_shortcuts_vdf(vdf_path)
+    except Exception as e:
+        logging.warning(f"Could not read shortcuts.vdf for collection rebuild: {e}")
+        return
+
+    if not shortcuts:
+        return
+
+    # Group by first tag (= category)
+    by_category: dict[str, list[int]] = {}
+    for sc in shortcuts:
+        tag = list(sc.tags.values())[0] if sc.tags else None
+        if tag:
+            by_category.setdefault(tag, []).append(sc.appid & 0xFFFFFFFF)
+
+    if not by_category:
+        return
+
+    uid = user_id if user_id != 'auto' else None
+    ok = update_steam_collections(steam_path, by_category, uid)
+    if ok:
+        total = sum(len(v) for v in by_category.values())
+        print(f"  Collections:    rebuilt {len(by_category)} collections ({total} memberships)")
+    else:
+        print(f"  Collections:    [WARN] failed to rebuild collections")
+
+
 def cmd_restore(args: argparse.Namespace) -> int:
     """Restore grid images from a backup."""
     from config import config_exists, get_resolved_config
@@ -235,6 +276,8 @@ def cmd_restore(args: argparse.Namespace) -> int:
         force=args.force,
     )
     if result == 0 and not args.dry_run:
+        # Rebuild Steam collections from the restored shortcuts.vdf tags
+        _rebuild_collections_after_restore(steam_path, grid_path, user_id)
         notify_steam_reload()
     return result
 
@@ -1701,7 +1744,7 @@ def _cmd_rom_collections(args: argparse.Namespace) -> int:
     for sc in shortcuts:
         tag = list(sc.tags.values())[0] if sc.tags else None
         if tag:
-            by_category.setdefault(tag, []).append(sc.appid)
+            by_category.setdefault(tag, []).append(sc.appid & 0xFFFFFFFF)
 
     print(f"Found {len(by_category)} categories:")
     for cat, ids in sorted(by_category.items()):
@@ -1717,6 +1760,111 @@ def _cmd_rom_collections(args: argparse.Namespace) -> int:
         print(f"\n[OK] Wrote {len(by_category)} collections ({total} total memberships) to cloud storage.")
     else:
         print("\nError: failed to update collections.")
+        return 1
+    return 0
+
+
+def cmd_collections(args: argparse.Namespace) -> int:
+    """Rebuild Steam library collections from current shortcuts.vdf.
+
+    Reads all non-Steam shortcuts, groups them by their first tag (category),
+    then writes native ``uc-*`` collections to cloud storage.
+
+    Supports filtering by type:
+      --type rom     Only ROM system collections (matched against known systems)
+      --type heroic  Only Heroic game collections
+      --type all     All collections (default)
+    """
+    from config import config_exists, get_resolved_config
+    from steam import find_steam_path, find_grid_path
+    from shortcuts import (
+        read_shortcuts_vdf,
+        update_steam_collections,
+    )
+
+    cfg = get_resolved_config() if config_exists() else {}
+    user_id = cfg.get('steam_user_id', 'auto')
+
+    try:
+        sp = find_steam_path()
+        grid_path = find_grid_path(sp, user_id if user_id != 'auto' else None)
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return 1
+
+    vdf_path = grid_path.parent / 'shortcuts.vdf'
+    if not vdf_path.exists():
+        print(f"Error: shortcuts.vdf not found at {vdf_path}")
+        return 1
+
+    shortcuts = read_shortcuts_vdf(vdf_path)
+    if not shortcuts:
+        print("No shortcuts found in shortcuts.vdf.")
+        return 0
+
+    # Determine filter
+    coll_type = getattr(args, 'type', 'all') or 'all'
+
+    # Known non-ROM tag values (these are excluded when --type rom)
+    NON_ROM_TAGS = {'Heroic'}
+
+    # Build set of known ROM system category names from systems.py
+    rom_system_tags: set[str] = set()
+    try:
+        from systems import list_supported_systems, get_system
+        for name in list_supported_systems():
+            sys_def = get_system(name)
+            if sys_def:
+                rom_system_tags.update(sys_def.all_category_tags())
+    except Exception:
+        pass  # If systems.py has issues, fall back to tag-based filtering
+
+    # Group shortcuts by first tag (= category)
+    by_category: dict[str, list[int]] = {}
+    filtered_shortcuts = []
+
+    for sc in shortcuts:
+        tag = list(sc.tags.values())[0] if sc.tags else None
+        if not tag:
+            continue
+
+        # Apply filter
+        if coll_type == 'rom' and tag in NON_ROM_TAGS:
+            continue
+        if coll_type == 'rom' and tag not in rom_system_tags:
+            # Not a known ROM system tag — skip
+            continue
+        if coll_type == 'heroic' and tag != 'Heroic':
+            continue
+        # coll_type == 'all' -> include everything
+
+        by_category.setdefault(tag, []).append(sc.appid & 0xFFFFFFFF)
+        filtered_shortcuts.append(sc)
+
+    if not by_category:
+        if coll_type == 'all':
+            print("No tagged shortcuts found in shortcuts.vdf.")
+        else:
+            print(f"No shortcuts found with type '{coll_type}'.")
+        return 0
+
+    print(f"\n  Rebuild Steam Collections ({coll_type})\n")
+    print(f"  Shortcuts: {len(filtered_shortcuts)}")
+    print(f"  Categories:")
+    for cat, ids in sorted(by_category.items()):
+        print(f"    {cat:<35} {len(ids):>4} games")
+
+    if args.dry_run:
+        print(f"\n  (dry run — nothing written)")
+        return 0
+
+    ok = update_steam_collections(sp, by_category, user_id if user_id != 'auto' else None)
+    if ok:
+        total = sum(len(v) for v in by_category.values())
+        print(f"\n  [OK] Wrote {len(by_category)} collections ({total} total memberships) to cloud storage.")
+        print(f"  Restart Steam to see updated collections.")
+    else:
+        print("\n  Error: failed to update collections.")
         return 1
     return 0
 
@@ -2452,6 +2600,30 @@ def main() -> int:
     rom_collections.add_argument(
         '--dry-run', action='store_true',
         help='Show what would be written without making changes')
+
+    # collections
+    sub_collections = subparsers.add_parser(
+        'collections',
+        help='Rebuild Steam library collections from shortcuts',
+        description=(
+            'Rebuilds Steam library collections (categories) from the tags\n'
+            'stored in shortcuts.vdf. Use after a Steam client update wipes\n'
+            'collections, or to repair broken category assignments.\n\n'
+            'Examples:\n'
+            '  sgm collections              # rebuild all collections\n'
+            '  sgm collections --type rom   # only ROM system collections\n'
+            '  sgm collections --type heroic # only Heroic game collections\n'
+            '  sgm collections --dry-run    # preview without writing'
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub_collections.add_argument(
+        '--type', choices=['rom', 'heroic', 'all'], default='all',
+        help='Which shortcuts to include (default: all)')
+    sub_collections.add_argument(
+        '--dry-run', action='store_true',
+        help='Show what would be written without making changes')
+    sub_collections.set_defaults(func=cmd_collections)
 
     # export
     sub_export = subparsers.add_parser('export', help='Export portable backup bundle')
