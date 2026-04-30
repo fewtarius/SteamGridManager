@@ -48,7 +48,10 @@ def get_cached_art(title: str, system_name: str,
     """Return cached art files for a game, keyed by art_type.
 
     Returns a dict like {'tall': Path(...), 'hero': Path(...), ...}.
-    Only returns types that are actually present in the cache.
+    Only returns types that are actually present in the cache AND have
+    valid dimensions for their art type (e.g. tall must be portrait).
+    Cached files with wrong aspect ratio are silently skipped so the
+    cascade can fetch a better image from a live provider.
     """
     base = cache_dir or DEFAULT_CACHE_DIR
     game_cache = base / _cache_key(title, system_name)
@@ -59,6 +62,15 @@ def get_cached_art(title: str, system_name: str,
         for ext in (".png", ".jpg"):
             p = game_cache / f"{art_type}{ext}"
             if p.exists():
+                # Validate dimensions for art types that have aspect ratio rules
+                if art_type in ("tall", "wide", "hero"):
+                    dims = _image_dimensions(p)
+                    if dims and not _valid_aspect_ratio(art_type, *dims):
+                        logger.debug(
+                            f"Cache skip: {art_type} for '{title}' "
+                            f"has wrong aspect ratio {dims[0]}x{dims[1]}"
+                        )
+                        continue
                 result[art_type] = p
                 break
     return result
@@ -85,6 +97,15 @@ def store_art_in_cache(title: str, system_name: str,
     for art_type, src in art_files.items():
         if not src.exists():
             continue
+        # Validate dimensions for art types that have aspect ratio rules
+        if art_type in ("tall", "wide", "hero"):
+            dims = _image_dimensions(src)
+            if dims and not _valid_aspect_ratio(art_type, *dims):
+                logger.debug(
+                    f"Cache reject: {art_type} for '{title}' ({system_name}) "
+                    f"has wrong aspect ratio {dims[0]}x{dims[1]}"
+                )
+                continue
         dst = game_cache / f"{art_type}{src.suffix}"
         if not dst.exists():
             shutil.copy2(src, dst)
@@ -197,6 +218,77 @@ logger = logging.getLogger(__name__)
 
 # Maps to Steam grid naming: {appid}.png, {appid}p.png, {appid}_hero.png, etc.
 ART_TYPES = ["tall", "wide", "hero", "logo", "icon"]
+
+
+def _image_dimensions(path: Path) -> Optional[Tuple[int, int]]:
+    """Read image dimensions from PNG or JPEG without external libraries.
+
+    Returns:
+        (width, height) or None if the format is unrecognized.
+    """
+    try:
+        header = path.read_bytes()[:32]
+        if len(header) < 8:
+            return None
+
+        # PNG: 8-byte signature, then IHDR chunk with width/height at bytes 16-23
+        if header[:8] == b'\x89PNG\r\n\x1a\n':
+            import struct
+            w = struct.unpack('>I', header[16:20])[0]
+            h = struct.unpack('>I', header[20:24])[0]
+            return (w, h)
+
+        # JPEG: SOI marker (FFD8), find SOF0/SOF2 marker for dimensions
+        if header[:2] == b'\xff\xd8':
+            import struct as _struct
+            # Read more of the file to find SOF marker
+            data = path.read_bytes()[:65536]
+            offset = 2
+            while offset < len(data) - 1:
+                if data[offset] != 0xFF:
+                    offset += 1
+                    continue
+                marker = data[offset + 1]
+                # SOF0 (FFC0) or SOF2 (FFC2) - progressive
+                if marker in (0xC0, 0xC2):
+                    h = _struct.unpack('>H', data[offset + 5:offset + 7])[0]
+                    w = _struct.unpack('>H', data[offset + 7:offset + 9])[0]
+                    return (w, h)
+                # Skip to next marker (length is at offset+2, big-endian uint16)
+                if marker in (0xD8, 0xD9):
+                    offset += 2
+                    continue
+                seg_len = _struct.unpack('>H', data[offset + 2:offset + 4])[0]
+                offset += 2 + seg_len
+            return None
+
+    except Exception:
+        return None
+    return None
+
+
+def _valid_aspect_ratio(art_type: str, width: int, height: int) -> bool:
+    """Check if image dimensions match the expected aspect ratio for an art type.
+
+    Rules:
+      - tall: must be portrait (height > width)
+      - wide/hero: must be landscape (width > height)
+      - logo/icon: no constraint (too variable)
+
+    Args:
+        art_type: One of 'tall', 'wide', 'hero', 'logo', 'icon'.
+        width: Image width in pixels.
+        height: Image height in pixels.
+
+    Returns:
+        True if dimensions are acceptable for the art type.
+    """
+    if art_type == "tall":
+        return height > width
+    elif art_type in ("wide", "hero"):
+        return width > height
+    # logo, icon: accept any dimensions
+    return True
 
 @dataclass
 class ArtResult:
@@ -1015,10 +1107,27 @@ class CascadeScraper:
                                         screenscraper_id, wanted_types=remaining)
 
                 for art_type, art_result in art.items():
-                    if art_type in remaining:
-                        results[art_type] = art_result
-                        remaining.discard(art_type)
-                        logger.debug(f"  {provider.name}: got {art_type}")
+                    if art_type not in remaining:
+                        continue
+
+                    # For art types with aspect ratio rules, download to a
+                    # temp file first and validate dimensions before accepting.
+                    # This prevents bad images (e.g. ScreenScraper's 745x745
+                    # square "tall" box art) from blocking the cascade.
+                    if art_type in ("tall", "wide", "hero"):
+                        validated = self._validate_art_dimensions(
+                            art_result, art_type
+                        )
+                        if not validated:
+                            logger.info(
+                                f"  {provider.name}: {art_type} rejected "
+                                f"(wrong aspect ratio)"
+                            )
+                            continue
+
+                    results[art_type] = art_result
+                    remaining.discard(art_type)
+                    logger.debug(f"  {provider.name}: got {art_type}")
 
             except Exception as e:
                 logger.warning(f"  {provider.name} error: {e}")
@@ -1035,6 +1144,37 @@ class CascadeScraper:
         # ──────────────────────────────────────────────────────────────
 
         return results
+
+    def _validate_art_dimensions(self, art_result: "ArtResult",
+                                  art_type: str) -> bool:
+        """Download an image to a temp file and validate its dimensions.
+
+        Returns True if the image has a valid aspect ratio for its art type,
+        or if dimensions cannot be determined (permissive).
+        The temp file is deleted after validation.
+        """
+        import tempfile
+        try:
+            with tempfile.NamedTemporaryFile(suffix=art_result.extension,
+                                             delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+
+            if not download_image(art_result.url, tmp_path, timeout=15):
+                tmp_path.unlink(missing_ok=True)
+                return True  # permissive on download failure
+
+            dims = _image_dimensions(tmp_path)
+            tmp_path.unlink(missing_ok=True)
+
+            if not dims:
+                return True  # can't determine dims, accept
+
+            if not _valid_aspect_ratio(art_type, *dims):
+                return False
+
+            return True
+        except Exception:
+            return True  # permissive on errors
 
     def _search_provider(self, provider, title: str,
                          ss_id: Optional[int], tgdb_id: Optional[str],
@@ -1164,6 +1304,19 @@ def save_grid_images(short_app_id: str, artwork: Dict[str, ArtResult],
         output_path = grid_path / filename
 
         if download_image(art_result.url, output_path, timeout):
+            # Validate dimensions for art types that have aspect ratio rules.
+            # Reject images with wrong orientation (e.g. a square "tall" from
+            # ScreenScraper) so the cascade can try the next provider.
+            if art_type in ("tall", "wide", "hero"):
+                dims = _image_dimensions(output_path)
+                if dims and not _valid_aspect_ratio(art_type, *dims):
+                    logger.info(
+                        f"Rejecting {art_type} for '{short_app_id}': "
+                        f"wrong aspect ratio {dims[0]}x{dims[1]} "
+                        f"(provider: {art_result.provider})"
+                    )
+                    output_path.unlink(missing_ok=True)
+                    continue
             saved[art_type] = output_path
 
     return saved
