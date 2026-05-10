@@ -264,36 +264,47 @@ def scan_rom_folder(system_name: str, folder_path: Path,
     roms: List[RomEntry] = []
     seen_titles: Dict[str, RomEntry] = {}
 
-    # Scan files in folder (non-recursive for most systems)
-    for item in sorted(folder_path.iterdir()):
-        # Skip subdirectories (except for some systems like Dreamcast)
-        if item.is_dir():
-            # Check if it's a folder-based ROM (Dreamcast, etc.)
-            if system_name in ("dreamcast",) and _is_folder_rom(item, system_def):
-                rom = _create_rom_entry(item, system_name, is_dir=True)
+    def _scan_path(path: Path, is_dir_rom: bool = False) -> None:
+        """Recursively scan a file or directory for ROMs."""
+        if path.is_dir():
+            # For directory-based systems (Dreamcast), treat the folder as a ROM
+            if is_dir_rom:
+                rom = _create_rom_entry(path, system_name, is_dir=True)
                 if rom:
                     roms.append(rom)
-            continue
+                return
+            # Recurse into subdirectories to find ROM files inside
+            for child in sorted(path.iterdir()):
+                if child.is_dir():
+                    _scan_path(child, is_dir_rom=False)
+                else:
+                    _process_file(child)
+        else:
+            _process_file(path)
 
-        # Skip non-ROM files
+    def _process_file(item: Path) -> None:
+        """Process a single ROM file."""
         if not system_def.is_rom_file(item.name):
-            continue
+            return
 
         rom = _create_rom_entry(item, system_name)
         if rom is None:
-            continue
+            return
 
-        # Dedup multi-disc: keep only Disc 1 entry
         base_title = rom.clean_title
         if base_title in seen_titles:
             existing = seen_titles[base_title]
             if rom.disc_number and rom.disc_number > 1:
                 existing.is_multi_disc = True
-                continue  # Skip subsequent discs
+                return
         else:
             seen_titles[base_title] = rom
 
         roms.append(rom)
+
+    # Scan all items in folder (files and directories)
+    for item in sorted(folder_path.iterdir()):
+        _scan_path(item, is_dir_rom=(system_name == "dreamcast" and _is_folder_rom(item, system_def)))
 
     logger.info(f"Found {len(roms)} ROMs in {system_name} ({folder_path})")
     return roms
@@ -381,7 +392,9 @@ def scan_all_systems(rom_root: Path) -> Dict[str, List[RomEntry]]:
         system_def = get_system(system_name)
 
         if system_def is None:
-            logger.info(f"Skipping unknown system folder: {system_name}")
+            # Subdirectory inside a known system folder - skip here, scan_rom_folder
+            # will recurse into it to find ROM files.
+            continue
             continue
 
         roms = scan_rom_folder(system_name, folder, system_def)
