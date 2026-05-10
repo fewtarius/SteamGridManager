@@ -304,7 +304,7 @@ def scan_rom_folder(system_name: str, folder_path: Path,
 
     # Scan all items in folder (files and directories)
     for item in sorted(folder_path.iterdir()):
-        _scan_path(item, is_dir_rom=(system_name == "dreamcast" and _is_folder_rom(item, system_def)))
+        _scan_path(item, is_dir_rom=(item.is_dir() and system_name == "dreamcast" and _is_folder_rom(item, system_def)))
 
     logger.info(f"Found {len(roms)} ROMs in {system_name} ({folder_path})")
     return roms
