@@ -552,6 +552,75 @@ def cmd_config(args: argparse.Namespace) -> int:
         return 0
 
 
+def cmd_emulators_list(args: argparse.Namespace) -> int:
+    """List and manage emulator configurations."""
+    from emulators import (get_registry, list_all_emulators, get_emulators_for_system,
+                           emulators_config_exists, create_emulator_from_id)
+    from systems import SYSTEMS, get_system
+
+    sub = getattr(args, 'emulators_action', None)
+
+    if sub == 'add':
+        # Handled by cmd_emulators_add
+        return cmd_emulators_add(args)
+
+    # List all emulators
+    print("\n Emulators\n")
+    emulators = list_all_emulators()
+    if not emulators:
+        print("  No emulators configured.")
+    else:
+        for em in sorted(emulators, key=lambda x: x['id']):
+            available = em.get('available', False)
+            status = "[OK]  " if available else "[--]  "
+            print(f"  {status}{em['id']}")
+            if em.get('description'):
+                print(f"       {em['description']}")
+
+    # List systems with their default emulators
+    print("\n Systems\n")
+    for sys_name in sorted(SYSTEMS.keys()):
+        sys_def = get_system(sys_name)
+        if not sys_def:
+            continue
+        default_id = sys_def.default_emulator_id or "none"
+        print(f"  {sys_name}: {sys_def.fullname} -> {default_id}")
+
+    return 0
+
+
+def cmd_emulators_add(args: argparse.Namespace) -> int:
+    """Add a custom emulator configuration."""
+    from emulators import get_registry, EMULATORS_CONFIG
+    import json
+
+    emulator_id = args.emulator_id
+    config = {
+        "display_name": args.name or emulator_id,
+        "executable": args.executable or "",
+        "flatpak_id": args.flatpak_id or "",
+        "launch_args": args.args,
+    }
+
+    registry = get_registry()
+    registry.add_custom_emulator(emulator_id, config)
+
+    # Associate with systems if specified
+    if args.system:
+        for system in args.system:
+            system_config = {
+                "default": emulator_id,
+                "emulators": {
+                    emulator_id: config
+                }
+            }
+            registry._system_configs[system] = system_config
+
+    registry.save_config()
+    print(f"Added emulator '{emulator_id}' to {EMULATORS_CONFIG}")
+    return 0
+
+
 def cmd_monitor(args: argparse.Namespace) -> int:
     """Manage the auto-detection monitor."""
     from monitor import install_monitor, uninstall_monitor, monitor_status, run_monitor_check
@@ -2495,7 +2564,25 @@ def main() -> int:
     config_set.add_argument('key', nargs='?', help='Config key')
     config_set.add_argument('value', nargs='?', help='Config value')
     sub_config.set_defaults(func=cmd_config)
-    
+
+    # emulators
+    from emulators import get_registry, list_all_emulators
+    sub_emulators = subparsers.add_parser('emulators', help='Manage emulator configurations')
+    emulators_sub = sub_emulators.add_subparsers(dest='emulators_action')
+    emulators_sub.add_parser('list', help='List all configured emulators')
+    emulators_sub.add_parser('list-systems', help='List systems with configured emulators')
+    emulators_status = emulators_sub.add_parser('status', help='Show emulator availability')
+    emulators_status.add_argument('--system', '-s', help='Filter by system')
+    emulators_add = emulators_sub.add_parser('add', help='Add custom emulator')
+    emulators_add.add_argument('emulator_id', help='Unique emulator identifier')
+    emulators_add.add_argument('--name', help='Display name')
+    emulators_add.add_argument('--executable', help='Path to executable or flatpak ID')
+    emulators_add.add_argument('--flatpak-id', help='Flatpak app ID')
+    emulators_add.add_argument('--args', default='"{rom}"', help='Launch arguments template')
+    emulators_add.add_argument('--system', '-s', action='append', help='Systems to associate with')
+    emulators_add.set_defaults(func=cmd_emulators_add)
+    sub_emulators.set_defaults(func=cmd_emulators_list)
+
     # monitor
     sub_monitor = subparsers.add_parser('monitor', help='Manage auto-detection service')
     monitor_sub = sub_monitor.add_subparsers(dest='monitor_action')

@@ -1,0 +1,574 @@
+{
+  "version": 1,
+  "_comment": "SGM Emulator Configuration - All emulators and systems defined here",
+  
+  "emulators": {
+    "retroarch": {
+      "display_name": "RetroArch",
+      "type": "retroarch",
+      "flatpak_id": "org.libretro.RetroArch",
+      "description": "Multi-platform emulator frontend with libretro cores"
+    },
+    "dolphin": {
+      "display_name": "Dolphin",
+      "type": "standalone",
+      "flatpak_id": "org.DolphinEmu.dolphin-emu",
+      "launch_args": "-b -e \"{rom}\"",
+      "description": "GameCube and Wii emulator"
+    },
+    "pcsx2": {
+      "display_name": "PCSX2",
+      "type": "standalone",
+      "flatpak_id": "net.pcsx2.PCSX2",
+      "launch_args": "\"{rom}\" -batch -fullscreen",
+      "description": "PlayStation 2 emulator"
+    },
+    "ppsspp": {
+      "display_name": "PPSSPP",
+      "type": "standalone",
+      "flatpak_id": "org.ppsspp.PPSSPP",
+      "launch_args": "\"{rom}\" --fullscreen",
+      "description": "PlayStation Portable emulator"
+    },
+    "cemu": {
+      "display_name": "Cemu",
+      "type": "standalone",
+      "flatpak_id": "info.cemu.Cemu",
+      "launch_args": "-f -g \"{rom}\"",
+      "description": "Wii U emulator"
+    },
+    "xemu": {
+      "display_name": "Xemu",
+      "type": "standalone",
+      "flatpak_id": "app.xemu.xemu",
+      "launch_args": "-full-screen -dvd_path \"{rom}\"",
+      "description": "Original Xbox emulator"
+    },
+    "rpcs3": {
+      "display_name": "RPCS3",
+      "type": "standalone",
+      "flatpak_id": "net.rpcs3.RPCS3",
+      "launch_args": "\"{rom}\"",
+      "description": "PlayStation 3 emulator"
+    },
+    "yuzu": {
+      "display_name": "Yuzu",
+      "type": "standalone",
+      "flatpak_id": "org.yuzu_emu.yuzu",
+      "launch_args": "-f \"{rom}\"",
+      "description": "Nintendo Switch emulator (deprecated)"
+    },
+    "citra": {
+      "display_name": "Citra",
+      "type": "standalone",
+      "flatpak_id": "org.citra_emu.citra",
+      "launch_args": "\"{rom}\"",
+      "description": "Nintendo 3DS emulator"
+    },
+    "vita3k": {
+      "display_name": "Vita3K",
+      "type": "native",
+      "executable": "Vita3K",
+      "launch_args": "-F -r \"{title_id}\"",
+      "launch_mode": "title_id",
+      "description": "PlayStation Vita emulator (uses title IDs)"
+    },
+    "mame": {
+      "display_name": "MAME",
+      "type": "native",
+      "executable": "mame",
+      "launch_args": "\"{rom_stem}\"",
+      "description": "Multiple Arcade Machine Emulator"
+    }
+  },
+
+  "retroarch_cores": {
+    "fceumm": {
+      "display_name": "FCEUmm (NES)",
+      "emulator": "retroarch",
+      "description": "Nintendo Entertainment System"
+    },
+    "snes9x": {
+      "display_name": "Snes9x (SNES)",
+      "emulator": "retroarch",
+      "description": "Super Nintendo"
+    },
+    "mgba": {
+      "display_name": "mGBA (GB/GBC/GBA)",
+      "emulator": "retroarch",
+      "description": "Game Boy, Game Boy Color, Game Boy Advance"
+    },
+    "mupen64plus_next": {
+      "display_name": "Mupen64Plus-Next (N64)",
+      "emulator": "retroarch",
+      "description": "Nintendo 64"
+    },
+    "melondsds": {
+      "display_name": "melonDS (DS)",
+      "emulator": "retroarch",
+      "description": "Nintendo DS"
+    },
+    "genesis_plus_gx": {
+      "display_name": "Genesis Plus GX (Genesis/SMS/GG)",
+      "emulator": "retroarch",
+      "description": "Sega Genesis, Master System, Game Gear"
+    },
+    "flycast": {
+      "display_name": "Flycast (Dreamcast)",
+      "emulator": "retroarch",
+      "description": "Sega Dreamcast"
+    },
+    "mednafen_saturn": {
+      "display_name": "Mednafen Saturn",
+      "emulator": "retroarch",
+      "description": "Sega Saturn"
+    },
+    "mednafen_psx_hw": {
+      "display_name": "Mednafen PSX HW (PS1)",
+      "emulator": "retroarch",
+      "description": "PlayStation"
+    },
+    "stella": {
+      "display_name": "Stella (2600)",
+      "emulator": "retroarch",
+      "description": "Atari 2600"
+    },
+    "atari800": {
+      "display_name": "Atari800 (5200)",
+      "emulator": "retroarch",
+      "description": "Atari 5200"
+    },
+    "prosystem": {
+      "display_name": "ProSystem (7800)",
+      "emulator": "retroarch",
+      "description": "Atari 7800"
+    },
+    "mednafen_lynx": {
+      "display_name": "Mednafen Lynx",
+      "emulator": "retroarch",
+      "description": "Atari Lynx"
+    },
+    "vice_x64sc": {
+      "display_name": "Vice (C64)",
+      "emulator": "retroarch",
+      "description": "Commodore 64"
+    },
+    "vice_xvic": {
+      "display_name": "Vice (VIC-20)",
+      "emulator": "retroarch",
+      "description": "Commodore VIC-20"
+    },
+    "puae": {
+      "display_name": "PUAE (Amiga)",
+      "emulator": "retroarch",
+      "description": "Commodore Amiga"
+    },
+    "gearcoleco": {
+      "display_name": "GearColeco (ColecoVision)",
+      "emulator": "retroarch",
+      "description": "ColecoVision"
+    },
+    "freeintv": {
+      "display_name": "FreeIntV (Intellivision)",
+      "emulator": "retroarch",
+      "description": "Intellivision"
+    },
+    "fbneo": {
+      "display_name": "FBNeo (Neo Geo)",
+      "emulator": "retroarch",
+      "description": "Neo Geo"
+    },
+    "dosbox_pure": {
+      "display_name": "DOSBox Pure (DOS)",
+      "emulator": "retroarch",
+      "description": "DOS games"
+    },
+    "81": {
+      "display_name": "Z-Machine (Infocom)",
+      "emulator": "retroarch",
+      "description": "Infocom / Z-Machine text adventures"
+    },
+    "mame2003_plus": {
+      "display_name": "MAME 2003 Plus (Arcade)",
+      "emulator": "retroarch",
+      "description": "Arcade games"
+    }
+  },
+
+  "systems": {
+    "nes": {
+      "fullname": "Nintendo Entertainment System",
+      "manufacturer": "Nintendo",
+      "hardware_type": "console",
+      "release_year": 1985,
+      "default_emulator": "retroarch/fceumm",
+      "extensions": [".nes", ".unif", ".unf", ".zip", ".7z"],
+      "screenscraper_id": 3,
+      "thegamesdb_id": "7",
+      "steam_category": "NES"
+    },
+    "snes": {
+      "fullname": "Super Nintendo",
+      "manufacturer": "Nintendo",
+      "hardware_type": "console",
+      "release_year": 1990,
+      "default_emulator": "retroarch/snes9x",
+      "extensions": [".smc", ".fig", ".sfc", ".swc", ".zip", ".7z"],
+      "screenscraper_id": 4,
+      "thegamesdb_id": "6",
+      "steam_category": "SNES"
+    },
+    "n64": {
+      "fullname": "Nintendo 64",
+      "manufacturer": "Nintendo",
+      "hardware_type": "console",
+      "release_year": 1996,
+      "default_emulator": "retroarch/mupen64plus_next",
+      "extensions": [".z64", ".n64", ".v64", ".zip", ".7z"],
+      "screenscraper_id": 14,
+      "thegamesdb_id": "3",
+      "steam_category": "N64"
+    },
+    "gb": {
+      "fullname": "Game Boy",
+      "manufacturer": "Nintendo",
+      "hardware_type": "portable",
+      "release_year": 1989,
+      "default_emulator": "retroarch/mgba",
+      "extensions": [".gb", ".zip", ".7z"],
+      "screenscraper_id": 9,
+      "thegamesdb_id": "4",
+      "steam_category": "GB"
+    },
+    "gbc": {
+      "fullname": "Game Boy Color",
+      "manufacturer": "Nintendo",
+      "hardware_type": "portable",
+      "release_year": 1998,
+      "default_emulator": "retroarch/mgba",
+      "extensions": [".gbc", ".zip", ".7z"],
+      "screenscraper_id": 10,
+      "thegamesdb_id": "41",
+      "steam_category": "GBC"
+    },
+    "gba": {
+      "fullname": "Game Boy Advance",
+      "manufacturer": "Nintendo",
+      "hardware_type": "portable",
+      "release_year": 2001,
+      "default_emulator": "retroarch/mgba",
+      "extensions": [".gba", ".zip", ".7z"],
+      "screenscraper_id": 12,
+      "thegamesdb_id": "5",
+      "steam_category": "GBA"
+    },
+    "nds": {
+      "fullname": "Nintendo DS",
+      "manufacturer": "Nintendo",
+      "hardware_type": "portable",
+      "release_year": 2004,
+      "default_emulator": "retroarch/melondsds",
+      "extensions": [".nds", ".zip", ".7z"],
+      "screenscraper_id": 15,
+      "thegamesdb_id": "8",
+      "steam_category": "DS"
+    },
+    "gamecube": {
+      "fullname": "GameCube",
+      "manufacturer": "Nintendo",
+      "hardware_type": "console",
+      "release_year": 2001,
+      "default_emulator": "dolphin",
+      "extensions": [".gcm", ".iso", ".gcz", ".ciso", ".wbfs", ".rvz", ".dol"],
+      "screenscraper_id": 13,
+      "thegamesdb_id": "2",
+      "steam_category": "Gamecube"
+    },
+    "wii": {
+      "fullname": "Wii",
+      "manufacturer": "Nintendo",
+      "hardware_type": "console",
+      "release_year": 2006,
+      "default_emulator": "dolphin",
+      "extensions": [".gcm", ".iso", ".gcz", ".ciso", ".wbfs", ".rvz", ".dol", ".wad"],
+      "screenscraper_id": 16,
+      "thegamesdb_id": "9",
+      "steam_category": "Wii"
+    },
+    "wiiu": {
+      "fullname": "Wii U",
+      "manufacturer": "Nintendo",
+      "hardware_type": "console",
+      "release_year": 2012,
+      "default_emulator": "cemu",
+      "extensions": [".wud", ".wux", ".wua", ".rpx"],
+      "screenscraper_id": 18,
+      "thegamesdb_id": "38",
+      "steam_category": "WiiU"
+    },
+    "genesis": {
+      "fullname": "Genesis",
+      "manufacturer": "Sega",
+      "hardware_type": "console",
+      "release_year": 1988,
+      "default_emulator": "retroarch/genesis_plus_gx",
+      "extensions": [".bin", ".gen", ".md", ".sg", ".smd", ".zip", ".7z"],
+      "screenscraper_id": 1,
+      "thegamesdb_id": "18",
+      "steam_category": "Genesis"
+    },
+    "mastersystem": {
+      "fullname": "Master System",
+      "manufacturer": "Sega",
+      "hardware_type": "console",
+      "release_year": 1985,
+      "default_emulator": "retroarch/genesis_plus_gx",
+      "extensions": [".bin", ".sms", ".zip", ".7z"],
+      "screenscraper_id": 2,
+      "thegamesdb_id": "35",
+      "steam_category": "SMS"
+    },
+    "gamegear": {
+      "fullname": "Game Gear",
+      "manufacturer": "Sega",
+      "hardware_type": "portable",
+      "release_year": 1990,
+      "default_emulator": "retroarch/genesis_plus_gx",
+      "extensions": [".bin", ".gg", ".zip", ".7z"],
+      "screenscraper_id": 21,
+      "thegamesdb_id": "20",
+      "steam_category": "GameGear"
+    },
+    "dreamcast": {
+      "fullname": "Dreamcast",
+      "manufacturer": "Sega",
+      "hardware_type": "console",
+      "release_year": 1998,
+      "default_emulator": "retroarch/flycast",
+      "extensions": [".cdi", ".gdi", ".chd", ".m3u", ".cue"],
+      "screenscraper_id": 23,
+      "thegamesdb_id": "16",
+      "steam_category": "Dreamcast"
+    },
+    "saturn": {
+      "fullname": "Saturn",
+      "manufacturer": "Sega",
+      "hardware_type": "console",
+      "release_year": 1994,
+      "default_emulator": "retroarch/mednafen_saturn",
+      "extensions": [".bin", ".iso", ".cue", ".m3u", ".zip", ".7z"],
+      "screenscraper_id": 24,
+      "thegamesdb_id": "17",
+      "steam_category": "Saturn"
+    },
+    "psx": {
+      "fullname": "PlayStation",
+      "manufacturer": "Sony",
+      "hardware_type": "console",
+      "release_year": 1994,
+      "default_emulator": "retroarch/mednafen_psx_hw",
+      "extensions": [".bin", ".cue", ".iso", ".img", ".pbp", ".zip", ".7z"],
+      "screenscraper_id": 7,
+      "thegamesdb_id": "10",
+      "steam_category": "PSX"
+    },
+    "ps2": {
+      "fullname": "PlayStation 2",
+      "manufacturer": "Sony",
+      "hardware_type": "console",
+      "release_year": 2000,
+      "default_emulator": "pcsx2",
+      "extensions": [".iso", ".bin", ".cue", ".m3u", ".zip", ".7z"],
+      "screenscraper_id": 17,
+      "thegamesdb_id": "1",
+      "steam_category": "PS2"
+    },
+    "psp": {
+      "fullname": "PlayStation Portable",
+      "manufacturer": "Sony",
+      "hardware_type": "portable",
+      "release_year": 2004,
+      "default_emulator": "ppsspp",
+      "extensions": [".iso", ".pbp", ".cso", ".zip", ".7z"],
+      "screenscraper_id": 19,
+      "thegamesdb_id": "13",
+      "steam_category": "PSP"
+    },
+    "psvita": {
+      "fullname": "PlayStation Vita",
+      "manufacturer": "Sony",
+      "hardware_type": "portable",
+      "release_year": 2011,
+      "default_emulator": "vita3k",
+      "scan_as_dirs": true,
+      "screenscraper_id": 0,
+      "thegamesdb_id": "19",
+      "steam_category": "Vita"
+    },
+    "atari2600": {
+      "fullname": "Atari 2600",
+      "manufacturer": "Atari",
+      "hardware_type": "console",
+      "release_year": 1977,
+      "default_emulator": "retroarch/stella",
+      "extensions": [".a26", ".bin", ".zip", ".7z"],
+      "screenscraper_id": 5,
+      "thegamesdb_id": "22",
+      "steam_category": "Atari2600"
+    },
+    "atari5200": {
+      "fullname": "Atari 5200",
+      "manufacturer": "Atari",
+      "hardware_type": "console",
+      "release_year": 1982,
+      "default_emulator": "retroarch/atari800",
+      "extensions": [".a52", ".bin", ".zip", ".7z"],
+      "screenscraper_id": 6,
+      "thegamesdb_id": "23",
+      "steam_category": "Atari5200"
+    },
+    "atari7800": {
+      "fullname": "Atari 7800",
+      "manufacturer": "Atari",
+      "hardware_type": "console",
+      "release_year": 1986,
+      "default_emulator": "retroarch/prosystem",
+      "extensions": [".a78", ".bin", ".zip", ".7z"],
+      "screenscraper_id": 22,
+      "thegamesdb_id": "37",
+      "steam_category": "Atari7800"
+    },
+    "atarilynx": {
+      "fullname": "Atari Lynx",
+      "manufacturer": "Atari",
+      "hardware_type": "handheld",
+      "release_year": 1989,
+      "default_emulator": "retroarch/mednafen_lynx",
+      "extensions": [".lnx", ".zip", ".7z"],
+      "screenscraper_id": 11,
+      "thegamesdb_id": "21",
+      "steam_category": "Lynx"
+    },
+    "c64": {
+      "fullname": "Commodore 64",
+      "manufacturer": "Commodore",
+      "hardware_type": "computer",
+      "release_year": 1982,
+      "default_emulator": "retroarch/vice_x64sc",
+      "extensions": [".d64", ".t64", ".x64", ".prg", ".p00", ".crt", ".zip", ".7z"],
+      "screenscraper_id": 25,
+      "thegamesdb_id": "0",
+      "steam_category": "C64"
+    },
+    "vic20": {
+      "fullname": "VIC-20",
+      "manufacturer": "Commodore",
+      "hardware_type": "computer",
+      "release_year": 1980,
+      "default_emulator": "retroarch/vice_xvic",
+      "extensions": [".d64", ".t64", ".prg", ".p00", ".crt", ".zip", ".7z"],
+      "screenscraper_id": 26,
+      "thegamesdb_id": "0",
+      "steam_category": "VIC20"
+    },
+    "amiga": {
+      "fullname": "Amiga",
+      "manufacturer": "Commodore",
+      "hardware_type": "computer",
+      "release_year": 1985,
+      "default_emulator": "retroarch/puae",
+      "extensions": [".adf", ".hdf", ".lha", ".zip", ".7z"],
+      "screenscraper_id": 27,
+      "thegamesdb_id": "0",
+      "steam_category": "Amiga"
+    },
+    "coleco": {
+      "fullname": "ColecoVision",
+      "manufacturer": "Coleco",
+      "hardware_type": "console",
+      "release_year": 1982,
+      "default_emulator": "retroarch/gearcoleco",
+      "extensions": [".col", ".rom", ".zip", ".7z"],
+      "screenscraper_id": 28,
+      "thegamesdb_id": "0",
+      "steam_category": "ColecoVision"
+    },
+    "intellivision": {
+      "fullname": "Intellivision",
+      "manufacturer": "Mattel",
+      "hardware_type": "console",
+      "release_year": 1979,
+      "default_emulator": "retroarch/freeintv",
+      "extensions": [".int", ".bin", ".zip", ".7z"],
+      "screenscraper_id": 29,
+      "thegamesdb_id": "24",
+      "steam_category": "Intellivision"
+    },
+    "neogeo": {
+      "fullname": "Neo Geo",
+      "manufacturer": "SNK",
+      "hardware_type": "arcade",
+      "release_year": 1990,
+      "default_emulator": "retroarch/fbneo",
+      "extensions": [".neo", ".zip", ".7z"],
+      "screenscraper_id": 30,
+      "thegamesdb_id": "0",
+      "steam_category": "NeoGeo"
+    },
+    "arcade": {
+      "fullname": "Arcade",
+      "manufacturer": "Various",
+      "hardware_type": "arcade",
+      "release_year": 0,
+      "default_emulator": "mame",
+      "extensions": [".zip", ".7z"],
+      "screenscraper_id": 31,
+      "thegamesdb_id": "0",
+      "steam_category": "Arcade"
+    },
+    "pc": {
+      "fullname": "DOS",
+      "manufacturer": "Microsoft",
+      "hardware_type": "computer",
+      "release_year": 1981,
+      "default_emulator": "retroarch/dosbox_pure",
+      "extensions": [".dos", ".pc", ".zip", ".7z"],
+      "screenscraper_id": 16,
+      "thegamesdb_id": "0",
+      "steam_category": "PC"
+    },
+    "infocom": {
+      "fullname": "Infocom / Z-Machine",
+      "manufacturer": "Infocom",
+      "hardware_type": "computer",
+      "release_year": 1980,
+      "default_emulator": "retroarch/81",
+      "extensions": [".dat", ".z1", ".z2", ".z3", ".z4", ".z5", ".z6", ".z7", ".z8", ".zip", ".7z"],
+      "screenscraper_id": 0,
+      "thegamesdb_id": "0",
+      "steam_category": "Infocom"
+    },
+    "zmachine": {
+      "fullname": "Z-Machine",
+      "manufacturer": "Infocom",
+      "hardware_type": "computer",
+      "release_year": 1980,
+      "default_emulator": "retroarch/81",
+      "extensions": [".dat", ".z1", ".z2", ".z3", ".z4", ".z5", ".z6", ".z7", ".z8", ".zip", ".7z"],
+      "screenscraper_id": 0,
+      "thegamesdb_id": "0",
+      "steam_category": "ZMachine"
+    },
+    "xbox": {
+      "fullname": "Xbox",
+      "manufacturer": "Microsoft",
+      "hardware_type": "console",
+      "release_year": 2001,
+      "default_emulator": "xemu",
+      "extensions": [".iso", ".bin", ".img", ".xbe"],
+      "screenscraper_id": 32,
+      "thegamesdb_id": "0",
+      "steam_category": "Xbox"
+    }
+  }
+}

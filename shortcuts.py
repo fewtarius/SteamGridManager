@@ -850,3 +850,92 @@ def delete_steam_collections(steam_path: Path,
     except (OSError, json.JSONDecodeError) as e:
         logger.warning(f"Failed to write cloud storage: {e}")
         return False
+
+
+
+# Emulator Plugin Integration
+def create_shortcut_with_plugin(rom_path: str, rom_name: str, system_def,
+                                emulator_plugin=None,
+                                launch_options: str = "",
+                                tags: Optional[Dict[str, str]] = None) -> SteamShortcut:
+    """Create a SteamShortcut using an EmulatorPlugin.
+
+    This function provides a clean interface between ROM scanning and
+    shortcut creation, supporting both the legacy EmulatorConfig system
+    and the new EmulatorPlugin system.
+
+    Args:
+        rom_path: Path to the ROM file or title ID (for title-ID mode).
+        rom_name: Steam display name for the game.
+        system_def: SystemDef/SystemPlugin for the system.
+        emulator_plugin: Optional EmulatorPlugin instance.
+            If None, falls back to system_def.emulator (legacy).
+        launch_options: Additional launch arguments.
+        tags: Dictionary of tag indices to values.
+
+    Returns:
+        SteamShortcut object ready to be added to shortcuts.vdf.
+    """
+    from pathlib import Path as _Path
+
+    # Handle both SystemPlugin (new) and SystemDef wrapper (backward compat)
+    launch_mode = "rom"
+    if hasattr(system_def, 'launch_mode'):
+        launch_mode = system_def.launch_mode
+    elif hasattr(system_def, 'emulator') and system_def.emulator:
+        launch_mode = getattr(system_def.emulator, 'launch_mode', 'rom')
+
+    # Determine the executable and launch mode
+    use_title_id = (rom_path and len(rom_path) > 10 and launch_mode == "title_id")
+
+    if emulator_plugin:
+        # Use the new plugin system
+        exe = emulator_plugin.get_steam_exe(rom_path)
+    elif use_title_id:
+        # Legacy Vita3K title-ID mode
+        if hasattr(system_def, 'emulator') and system_def.emulator:
+            exe = system_def.emulator.get_steam_exe(rom_path)
+        else:
+            exe = rom_path
+    else:
+        # Legacy ROM file mode
+        if hasattr(system_def, 'emulator') and system_def.emulator:
+            exe = system_def.emulator.get_steam_exe(str(_Path(rom_path)))
+        else:
+            exe = str(_Path(rom_path))
+
+    # Generate IDs (must use the same exe format as SRM for compatibility)
+    appid = generate_shortcut_id(exe, rom_name)
+
+    # Determine start directory
+    if use_title_id:
+        # For Vita3K: start_dir is the emulator binary directory
+        if emulator_plugin:
+            exe_path = emulator_plugin.find_executable()
+        elif hasattr(system_def, 'emulator') and system_def.emulator:
+            exe_path = getattr(system_def.emulator, 'emulator', 'Vita3K')
+        else:
+            exe_path = 'Vita3K'
+        start_dir = f'"{_Path(exe_path).parent}"'
+    else:
+        start_dir = f'"{str(_Path(rom_path).parent)}"'
+
+    # Build tags - get steam_category
+    if tags is None:
+        if hasattr(system_def, 'steam_category'):
+            category = system_def.steam_category
+        elif hasattr(system_def, 'get_steam_category'):
+            category = system_def.get_steam_category()
+        else:
+            category = "ROM"
+        tags = {"0": category}
+
+    sc = SteamShortcut(
+        appid=appid,
+        appname=rom_name,
+        exe=exe,
+        start_dir=start_dir,
+        launch_options=launch_options,
+        tags=tags,
+    )
+    return sc
