@@ -853,6 +853,397 @@ def delete_steam_collections(steam_path: Path,
 
 
 
+
+@dataclass
+class CloudCollection:
+    """Represents a Steam collection read from cloud storage."""
+    coll_id: str
+    name: str
+    added: list[int]
+    removed: list[int]
+    is_deleted: bool = False
+
+
+def read_cloud_collections(steam_path: Path,
+                            user_id: Optional[str] = None
+                            ) -> list[CloudCollection]:
+    """Read all Steam collections from cloud-storage-namespace-1.json.
+
+    Args:
+        steam_path: Steam installation path.
+        user_id: Specific Steam user ID, or None to auto-detect.
+
+    Returns:
+        List of CloudCollection objects. Deleted collections have is_deleted=True.
+    """
+    import json
+    import re
+
+    try:
+        vdf_path = find_localconfig_vdf(steam_path, user_id)
+    except FileNotFoundError as e:
+        logger.warning(f"Could not find localconfig.vdf: {e}")
+        return []
+
+    cloud_path = vdf_path.parent / "cloudstorage" / "cloud-storage-namespace-1.json"
+    if not cloud_path.exists():
+        return []
+
+    try:
+        cloud_data: list = json.load(cloud_path.open(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning(f"Failed to read cloud storage: {e}")
+        return []
+
+    collections: list[CloudCollection] = []
+    for item in cloud_data:
+        if not isinstance(item, list) or len(item) < 2:
+            continue
+        key = item[0]
+        entry = item[1] if isinstance(item[1], dict) else {}
+
+        if not isinstance(key, str) or not key.startswith("user-collections."):
+            continue
+        if key.startswith("user-collections.srm-"):
+            continue  # skip legacy SRM collections
+
+        coll_id = key.replace("user-collections.", "")
+        is_deleted = entry.get("is_deleted", False)
+
+        if is_deleted:
+            collections.append(CloudCollection(
+                coll_id=coll_id,
+                name="",
+                added=[],
+                removed=[],
+                is_deleted=True,
+            ))
+            continue
+
+        value_str = entry.get("value", "")
+        if value_str:
+            try:
+                value: dict = json.loads(value_str)
+            except json.JSONDecodeError:
+                continue
+        else:
+            value = {}
+
+        # Try to get name from value, or fall back to localconfig
+        name = value.get("name", "")
+        if not name:
+            name = _get_collection_name_from_localconfig(vdf_path, coll_id)
+
+        added_raw = value.get("added", [])
+        removed_raw = value.get("removed", [])
+        added = [int(x) for x in added_raw if isinstance(x, int) or (isinstance(x, str) and x.isdigit())]
+        removed = [int(x) for x in removed_raw if isinstance(x, int) or (isinstance(x, str) and x.isdigit())]
+
+        collections.append(CloudCollection(
+            coll_id=coll_id,
+            name=name,
+            added=added,
+            removed=removed,
+            is_deleted=False,
+        ))
+
+    return collections
+
+
+def _get_collection_name_from_localconfig(vdf_path: Path, coll_id: str) -> str:
+    """Look up a collection name from localconfig.vdf user-collections cache."""
+    import json
+    import re
+    try:
+        content = vdf_path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+    pattern = re.compile(r'"user-collections"	+"(.*?)"(\s*\n)', re.DOTALL)
+    match = pattern.search(content)
+    if not match:
+        return ""
+
+    raw_json = match.group(2)
+    raw_json = raw_json.replace('\"', '\x01').replace('\"', '"').replace('\x01', '\"')
+    try:
+        collections: dict = json.loads(raw_json)
+    except json.JSONDecodeError:
+        return ""
+
+    entry = collections.get(coll_id, {})
+    return entry.get("name", "")
+
+
+
+
+def modify_cloud_collection(steam_path: Path,
+                              coll_id: str,
+                              add_app_ids: Optional[list[int]] = None,
+                              remove_app_ids: Optional[list[int]] = None,
+                              user_id: Optional[str] = None) -> bool:
+    """Add or remove app IDs from a Steam collection in cloud storage.
+
+    Args:
+        steam_path: Steam installation path.
+        coll_id: Collection ID (e.g. "uc-+6pgB5fyxXlz").
+        add_app_ids: List of unsigned int32 app IDs to add.
+        remove_app_ids: List of unsigned int32 app IDs to remove.
+        user_id: Specific Steam user ID, or None to auto-detect.
+
+    Returns:
+        True on success, False on failure.
+    """
+    import time as _time
+
+    if not add_app_ids and not remove_app_ids:
+        logger.debug("No changes specified for collection modification")
+        return True
+
+    try:
+        vdf_path = find_localconfig_vdf(steam_path, user_id)
+    except FileNotFoundError as e:
+        logger.warning(f"Could not find localconfig.vdf: {e}")
+        return False
+
+    cloud_path = vdf_path.parent / "cloudstorage" / "cloud-storage-namespace-1.json"
+    if not cloud_path.exists():
+        logger.warning(f"Cloud storage not found at {cloud_path}")
+        return False
+
+    try:
+        cloud_data: list = json.load(cloud_path.open(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning(f"Failed to read cloud storage: {e}")
+        return False
+
+    # Build index
+    cloud_index: dict[str, int] = {}
+    for i, item in enumerate(cloud_data):
+        if isinstance(item, list) and len(item) >= 2 and isinstance(item[1], dict):
+            cloud_index[item[1].get("key", "")] = i
+
+    cloud_key = f"user-collections.{coll_id}"
+    next_version = 1
+    for item in cloud_data:
+        if isinstance(item, list) and len(item) >= 2:
+            try:
+                v = int(str(item[1].get("version", "0")))
+                next_version = max(next_version, v + 1)
+            except (ValueError, TypeError):
+                pass
+
+    timestamp_ms = int(_time.time() * 1000)
+
+    if cloud_key in cloud_index:
+        entry = cloud_data[cloud_index[cloud_key]][1]
+        if entry.get("is_deleted"):
+            logger.warning(f"Collection {coll_id} is marked as deleted")
+            return False
+
+        value_str = entry.get("value", "{}")
+        try:
+            value: dict = json.loads(value_str)
+        except json.JSONDecodeError:
+            value = {"id": coll_id, "added": [], "removed": []}
+
+        # Parse existing added/removed
+        current_added = [int(x) for x in value.get("added", [])
+                         if isinstance(x, int) or (isinstance(x, str) and x.isdigit())]
+        current_removed = [int(x) for x in value.get("removed", [])
+                           if isinstance(x, int) or (isinstance(x, str) and x.isdigit())]
+
+        # Apply removals first (from both added and removed)
+        if remove_app_ids:
+            for aid in remove_app_ids:
+                if aid in current_added:
+                    current_added.remove(aid)
+                if aid not in current_removed:
+                    current_removed.append(aid)
+
+        # Apply additions (from added, move from removed)
+        if add_app_ids:
+            for aid in add_app_ids:
+                if aid in current_removed:
+                    current_removed.remove(aid)
+                if aid not in current_added:
+                    current_added.append(aid)
+
+        value["added"] = current_added
+        value["removed"] = current_removed
+    else:
+        # Collection doesn't exist, create it
+        value = {
+            "id": coll_id,
+            "name": "",
+            "added": add_app_ids or [],
+            "removed": remove_app_ids or [],
+        }
+
+    new_entry = {
+        "key": cloud_key,
+        "timestamp": timestamp_ms,
+        "value": json.dumps(value, separators=(",", ":")),
+        "version": str(next_version),
+        "conflictResolutionMethod": "custom",
+        "strMethodId": "union-collections",
+    }
+
+    if cloud_key in cloud_index:
+        cloud_data[cloud_index[cloud_key]] = [cloud_key, new_entry]
+    else:
+        cloud_data.append([cloud_key, new_entry])
+        cloud_index[cloud_key] = len(cloud_data) - 1
+
+    # Update localconfig cache too
+    _update_localconfig_collection(vdf_path, coll_id, value)
+
+    try:
+        import os as _os
+        tmp_cloud = cloud_path.with_suffix(".json.sgm_tmp")
+        with tmp_cloud.open("w", encoding="utf-8") as f:
+            json.dump(cloud_data, f, separators=(",", ":"))
+        _os.replace(tmp_cloud, cloud_path)
+        cloud_modified_path = vdf_path.parent / "cloudstorage" / "cloud-storage-namespace-1.modified.json"
+        cloud_modified_path.write_text("[]", encoding="utf-8")
+        logger.info(f"Modified collection {coll_id}")
+        return True
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning(f"Failed to write cloud storage: {e}")
+        return False
+
+
+def _update_localconfig_collection(vdf_path: Path, coll_id: str, value: dict) -> None:
+    """Update localconfig.vdf user-collections cache for a specific collection."""
+    import re
+    try:
+        content = vdf_path.read_text(encoding="utf-8")
+    except OSError:
+        return
+
+    pattern = re.compile(r'"user-collections"	+"(.*?)"(\s*)', re.DOTALL)
+    match = pattern.search(content)
+
+    if match:
+        raw_json = match.group(2)
+        raw_json = raw_json.replace('\"', '').replace('\"', '"').replace('', '\"')
+        try:
+            collections: dict = json.loads(raw_json)
+        except json.JSONDecodeError:
+            collections = {}
+    else:
+        collections = {}
+
+    collections[coll_id] = {
+        "id": value.get("id", coll_id),
+        "added": value.get("added", []),
+        "removed": value.get("removed", []),
+    }
+
+    new_json = json.dumps(collections, separators=(",", ":")).replace('"', '\"')
+
+    if match:
+        new_content = (
+            content[: match.start()]
+            + match.group(1)
+            + f'"{new_json}"'
+            + match.group(3)
+            + content[match.end():]
+        )
+    else:
+        insert_line = f'\t\t"user-collections"\t\t"{new_json}"\n'
+        insert_match = re.search(r'("user-roaming-config-store".*?\n)', content, re.DOTALL)
+        if insert_match:
+            pos = insert_match.end()
+            new_content = content[:pos] + insert_line + content[pos:]
+        else:
+            new_content = content.rstrip() + "\n" + insert_line
+
+    try:
+        import os
+        tmp = vdf_path.with_suffix(".vdf.sgm_tmp")
+        tmp.write_text(new_content, encoding="utf-8")
+        os.replace(tmp, vdf_path)
+        logger.debug(f"Updated localconfig.vdf for collection {coll_id}")
+    except OSError as e:
+        logger.warning(f"Failed to update localconfig.vdf: {e}")
+
+
+def delete_cloud_collection(steam_path: Path,
+                              coll_id: str,
+                              user_id: Optional[str] = None) -> bool:
+    """Mark a Steam collection as deleted in cloud storage.
+
+    Args:
+        steam_path: Steam installation path.
+        coll_id: Collection ID to delete.
+        user_id: Specific Steam user ID, or None to auto-detect.
+
+    Returns:
+        True on success, False on failure.
+    """
+    import time as _time
+
+    try:
+        vdf_path = find_localconfig_vdf(steam_path, user_id)
+    except FileNotFoundError as e:
+        logger.warning(f"Could not find localconfig.vdf: {e}")
+        return False
+
+    cloud_path = vdf_path.parent / "cloudstorage" / "cloud-storage-namespace-1.json"
+    if not cloud_path.exists():
+        return False
+
+    try:
+        cloud_data: list = json.load(cloud_path.open(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning(f"Failed to read cloud storage: {e}")
+        return False
+
+    cloud_key = f"user-collections.{coll_id}"
+    cloud_index: dict[str, int] = {}
+    for i, item in enumerate(cloud_data):
+        if isinstance(item, list) and len(item) >= 2 and isinstance(item[1], dict):
+            cloud_index[item[1].get("key", "")] = i
+
+    next_version = 1
+    for item in cloud_data:
+        if isinstance(item, list) and len(item) >= 2:
+            try:
+                v = int(str(item[1].get("version", "0")))
+                next_version = max(next_version, v + 1)
+            except (ValueError, TypeError):
+                pass
+
+    timestamp_ms = int(_time.time() * 1000)
+
+    deleted_entry = {
+        "key": cloud_key,
+        "timestamp": timestamp_ms,
+        "is_deleted": True,
+        "version": str(next_version),
+    }
+
+    if cloud_key in cloud_index:
+        cloud_data[cloud_index[cloud_key]] = [cloud_key, deleted_entry]
+    else:
+        cloud_data.append([cloud_key, deleted_entry])
+
+    try:
+        import os as _os
+        tmp_cloud = cloud_path.with_suffix(".json.sgm_tmp")
+        with tmp_cloud.open("w", encoding="utf-8") as f:
+            json.dump(cloud_data, f, separators=(",", ":"))
+        _os.replace(tmp_cloud, cloud_path)
+        cloud_modified_path = vdf_path.parent / "cloudstorage" / "cloud-storage-namespace-1.modified.json"
+        cloud_modified_path.write_text("[]", encoding="utf-8")
+        logger.info(f"Deleted collection {coll_id}")
+        return True
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning(f"Failed to write cloud storage: {e}")
+        return False
+
+
 # Emulator Plugin Integration
 def create_shortcut_with_plugin(rom_path: str, rom_name: str, system_def,
                                 emulator_plugin=None,

@@ -1834,6 +1834,236 @@ def _cmd_rom_collections(args: argparse.Namespace) -> int:
 
 
 def cmd_collections(args: argparse.Namespace) -> int:
+    """Manage Steam collections (list, edit, remove)."""
+    # Check for sub-action
+    collections_action = getattr(args, 'collections_action', None)
+
+    if collections_action == 'list':
+        return cmd_collections_list(args)
+    elif collections_action == 'edit':
+        return cmd_collections_edit(args)
+    elif collections_action == 'remove':
+        return cmd_collections_remove(args)
+    else:
+        # Default: rebuild collections from shortcuts.vdf (original behavior)
+        return cmd_collections_rebuild(args)
+
+
+def cmd_collections_list(args: argparse.Namespace) -> int:
+    """List all Steam collections."""
+    from config import config_exists, get_resolved_config
+    from shortcuts import read_cloud_collections
+    from steam import find_steam_path
+
+    try:
+        sp = find_steam_path()
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return 1
+
+    cfg = get_resolved_config() if config_exists() else {}
+    user_id = cfg.get('steam_user_id', 'auto')
+
+    collections = read_cloud_collections(sp, user_id if user_id != 'auto' else None)
+
+    if not collections:
+        print("\n  No collections found.")
+        return 0
+
+    active = [c for c in collections if not c.is_deleted]
+    deleted = [c for c in collections if c.is_deleted]
+
+    print(f"\n  Steam Collections\n")
+    print(f"  Active:    {len(active)}")
+    print(f"  Deleted:   {len(deleted)}\n")
+
+    if active:
+        print("  Active Collections:")
+        for c in sorted(active, key=lambda x: x.name or x.coll_id):
+            status = ""
+            if c.added and c.removed:
+                status = f" ({len(c.added)} added, {len(c.removed)} removed)"
+            elif c.added:
+                status = f" ({len(c.added)} games)"
+            name = c.name if c.name else c.coll_id
+            print(f"    {name}{status}")
+
+    if deleted:
+        print(f"\n  Deleted Collections (still in cloud storage):")
+        for c in sorted(deleted, key=lambda x: x.coll_id):
+            print(f"    {c.coll_id}")
+
+    return 0
+
+
+def cmd_collections_edit(args: argparse.Namespace) -> int:
+    """Add or remove games from a collection."""
+    from config import config_exists, get_resolved_config
+    from shortcuts import read_cloud_collections, modify_cloud_collection, read_shortcuts_vdf
+    from steam import find_steam_path, find_grid_path
+
+    try:
+        sp = find_steam_path()
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return 1
+
+    cfg = get_resolved_config() if config_exists() else {}
+    user_id = cfg.get('steam_user_id', 'auto')
+
+    collection_name_or_id = getattr(args, 'name', None)
+    add_games = getattr(args, 'add', None)
+    remove_games = getattr(args, 'remove', None)
+
+    if not collection_name_or_id:
+        print("Error: collection name or ID required")
+        return 1
+
+    if not add_games and not remove_games:
+        print("Error: specify --add or --remove")
+        return 1
+
+    # Find the collection
+    collections = read_cloud_collections(sp, user_id if user_id != 'auto' else None)
+
+    target = None
+    for c in collections:
+        if not c.is_deleted:
+            if (c.name and c.name.lower() == collection_name_or_id.lower()) or c.coll_id == collection_name_or_id:
+                target = c
+                break
+
+    if not target:
+        print(f"Error: collection '{collection_name_or_id}' not found")
+        return 1
+
+    # Load shortcuts to find app IDs by game name
+    try:
+        grid_path = find_grid_path(sp, user_id if user_id != 'auto' else None)
+        vdf_path = grid_path.parent / 'shortcuts.vdf'
+        shortcuts = read_shortcuts_vdf(vdf_path) if vdf_path.exists() else []
+    except FileNotFoundError:
+        shortcuts = []
+
+    # Build a name->appid map
+    name_to_appid: dict[str, int] = {}
+    for sc in shortcuts:
+        name = sc.app_name.strip()
+        name_to_appid[name.lower()] = sc.appid & 0xFFFFFFFF
+
+    # Resolve game names to app IDs
+    add_appids: list[int] = []
+    remove_appids: list[int] = []
+
+    if add_games:
+        for game in add_games:
+            game_lower = game.lower()
+            if game_lower in name_to_appid:
+                add_appids.append(name_to_appid[game_lower])
+            else:
+                # Try partial match
+                matches = [k for k in name_to_appid if game_lower in k]
+                if len(matches) == 1:
+                    add_appids.append(name_to_appid[matches[0]])
+                elif len(matches) > 1:
+                    print(f"Warning: multiple matches for '{game}': {matches}")
+                else:
+                    print(f"Warning: game '{game}' not found in shortcuts")
+
+    if remove_games:
+        for game in remove_games:
+            game_lower = game.lower()
+            if game_lower in name_to_appid:
+                remove_appids.append(name_to_appid[game_lower])
+            else:
+                matches = [k for k in name_to_appid if game_lower in k]
+                if len(matches) == 1:
+                    remove_appids.append(name_to_appid[matches[0]])
+                elif len(matches) > 1:
+                    print(f"Warning: multiple matches for '{game}': {matches}")
+                else:
+                    print(f"Warning: game '{game}' not found in shortcuts")
+
+    if args.dry_run:
+        if add_appids:
+            print(f"\n  (dry run) Would add {len(add_appids)} game(s) to '{target.name or target.coll_id}'")
+        if remove_appids:
+            print(f"\n  (dry run) Would remove {len(remove_appids)} game(s) from '{target.name or target.coll_id}'")
+        return 0
+
+    ok = modify_cloud_collection(
+        sp,
+        target.coll_id,
+        add_appids if add_appids else None,
+        remove_appids if remove_appids else None,
+        user_id if user_id != 'auto' else None,
+    )
+
+    if ok:
+        print(f"\n  [OK] Updated collection '{target.name or target.coll_id}'")
+        print(f"  Restart Steam to see updated collection.")
+    else:
+        print("\n  Error: failed to update collection.")
+        return 1
+
+    return 0
+
+
+def cmd_collections_remove(args: argparse.Namespace) -> int:
+    """Delete a Steam collection."""
+    from config import config_exists, get_resolved_config
+    from shortcuts import read_cloud_collections, delete_cloud_collection
+    from steam import find_steam_path
+
+    try:
+        sp = find_steam_path()
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return 1
+
+    cfg = get_resolved_config() if config_exists() else {}
+    user_id = cfg.get('steam_user_id', 'auto')
+
+    collection_name_or_id = getattr(args, 'name', None)
+    if not collection_name_or_id:
+        print("Error: collection name or ID required")
+        return 1
+
+    # Find the collection
+    collections = read_cloud_collections(sp, user_id if user_id != 'auto' else None)
+
+    target = None
+    for c in collections:
+        if not c.is_deleted:
+            if (c.name and c.name.lower() == collection_name_or_id.lower()) or c.coll_id == collection_name_or_id:
+                target = c
+                break
+
+    if not target:
+        print(f"Error: collection '{collection_name_or_id}' not found")
+        return 1
+
+    if args.dry_run:
+        print(f"\n  (dry run) Would delete collection '{target.name or target.coll_id}'")
+        return 0
+
+    ok = delete_cloud_collection(
+        sp,
+        target.coll_id,
+        user_id if user_id != 'auto' else None,
+    )
+
+    if ok:
+        print(f"\n  [OK] Deleted collection '{target.name or target.coll_id}'")
+        print(f"  Restart Steam to see collection removed.")
+    else:
+        print("\n  Error: failed to delete collection.")
+        return 1
+
+    return 0
+
+
+def cmd_collections_rebuild(args: argparse.Namespace) -> int:
     """Rebuild Steam library collections from current shortcuts.vdf.
 
     Reads all non-Steam shortcuts, groups them by their first tag (category),
@@ -1923,7 +2153,7 @@ def cmd_collections(args: argparse.Namespace) -> int:
     for cat, ids in sorted(by_category.items()):
         print(f"    {cat:<35} {len(ids):>4} games")
 
-    if args.dry_run:
+    if getattr(args, 'dry_run', False):
         print(f"\n  (dry run — nothing written)")
         return 0
 
@@ -2691,25 +2921,68 @@ def main() -> int:
     # collections
     sub_collections = subparsers.add_parser(
         'collections',
-        help='Rebuild Steam library collections from shortcuts',
+        help='Manage Steam library collections',
         description=(
-            'Rebuilds Steam library collections (categories) from the tags\n'
-            'stored in shortcuts.vdf. Use after a Steam client update wipes\n'
-            'collections, or to repair broken category assignments.\n\n'
-            'Examples:\n'
-            '  sgm collections              # rebuild all collections\n'
-            '  sgm collections --type rom   # only ROM system collections\n'
-            '  sgm collections --type heroic # only Heroic game collections\n'
-            '  sgm collections --dry-run    # preview without writing'
+            'Steam library collections management:\n\n'
+            '  sgm collections list              # list all collections\n'
+            '  sgm collections edit <name>       # add/remove games\n'
+            '  sgm collections remove <name>     # delete a collection\n'
+            '  sgm collections rebuild            # rebuild from shortcuts\n\n'
+            'Or use rebuild mode with filtering:\n'
+            '  sgm collections rebuild --type rom   # only ROM system collections\n'
+            '  sgm collections rebuild --type heroic # only Heroic game collections\n'
+            '  sgm collections rebuild --dry-run    # preview without writing'
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    sub_collections.add_argument(
+    collections_sub = sub_collections.add_subparsers(dest='collections_action')
+
+    collections_list = collections_sub.add_parser('list', help='List all collections')
+    collections_list.set_defaults(func=cmd_collections)
+
+    collections_edit = collections_sub.add_parser(
+        'edit', help='Add or remove games from a collection')
+    collections_edit.add_argument('name', help='Collection name or ID')
+    collections_edit.add_argument('--add', '-a', action='append', default=[],
+                                  help='Add a game to the collection (can be repeated)')
+    collections_edit.add_argument('--remove', '-r', action='append', default=[],
+                                  help='Remove a game from the collection (can be repeated)')
+    collections_edit.add_argument('--id', dest='use_id', action='store_true',
+                                  help='Treat name as collection ID instead of name')
+    collections_edit.add_argument('--dry-run', action='store_true',
+                                  help='Show what would be changed')
+    collections_edit.set_defaults(func=cmd_collections)
+
+    collections_remove = collections_sub.add_parser(
+        'remove', help='Delete a collection')
+    collections_remove.add_argument('name', help='Collection name or ID')
+    collections_remove.add_argument('--id', dest='use_id', action='store_true',
+                                    help='Treat name as collection ID instead of name')
+    collections_remove.add_argument('--dry-run', action='store_true',
+                                    help='Show what would be deleted')
+    collections_remove.set_defaults(func=cmd_collections)
+
+    collections_rebuild = collections_sub.add_parser(
+        'rebuild', help='Rebuild collections from shortcuts.vdf tags',
+        description=(
+            'Reads shortcut tags and creates native Steam collections.\n'
+            'Use this after Steam wipes your collections.\n\n'
+            'Examples:\n'
+            '  sgm collections rebuild              # rebuild all\n'
+            '  sgm collections rebuild --type rom   # only ROM systems\n'
+            '  sgm collections rebuild --dry-run    # preview first'
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    collections_rebuild.add_argument(
         '--type', choices=['rom', 'heroic', 'all'], default='all',
         help='Which shortcuts to include (default: all)')
-    sub_collections.add_argument(
+    collections_rebuild.add_argument(
         '--dry-run', action='store_true',
         help='Show what would be written without making changes')
+    collections_rebuild.set_defaults(func=cmd_collections)
+
+    # Default: collections with no action shows help
     sub_collections.set_defaults(func=cmd_collections)
 
     # export
