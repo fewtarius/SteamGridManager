@@ -1573,9 +1573,18 @@ def cmd_rom(args: argparse.Namespace) -> int:
 
         # Build shortcuts
         new_shortcuts = []
+        skipped_systems = {}
         for system, roms in sorted(all_roms.items()):
             sys_def = get_system(system)
             if not sys_def:
+                continue
+
+            # Check if the emulator is available before processing ROMs
+            try:
+                sys_def.emulator.find_executable()
+            except FileNotFoundError:
+                skipped_systems[system] = len(roms)
+                print(f"  Skipping {system}: emulator not installed")
                 continue
 
             for rom in roms:
@@ -1612,11 +1621,25 @@ def cmd_rom(args: argparse.Namespace) -> int:
                 new_shortcuts.append((sc, rom, sys_def, short_id))
 
         if not new_shortcuts:
-            print("No shortcuts to create.")
+            if skipped_systems:
+                print("No shortcuts to create.")
+                print("\nSkipped systems (emulator not installed):")
+                for sys_name, count in sorted(skipped_systems.items()):
+                    sys_def = get_system(sys_name)
+                    label = sys_def.fullname if sys_def else sys_name
+                    print(f"  {label}")
+            else:
+                print("No shortcuts to create.")
             return 0
 
         # Add shortcuts to VDF
         print(f"\nAdding {len(new_shortcuts)} shortcuts to Steam...")
+        if skipped_systems:
+            print(f"Skipped {len(skipped_systems)} systems (emulator not installed):")
+            for sys_name in sorted(skipped_systems.keys()):
+                sys_def = get_system(sys_name)
+                label = sys_def.fullname if sys_def else sys_name
+                print(f"  {label}")
         shortcuts_only = [sc for sc, _, _, _ in new_shortcuts]
         # Collect all tag names (current + legacy aliases) for systems being
         # imported so we can purge old SRM-format entries (different app IDs
