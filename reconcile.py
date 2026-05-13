@@ -474,8 +474,15 @@ def reconcile(
     shortcuts = get_existing_shortcuts(steam_path, user_id)
     report.total_shortcuts = len(shortcuts)
 
-    # Build set of app IDs from shortcuts (unsigned 32-bit)
-    shortcut_app_ids = {str(sc.appid & 0xFFFFFFFF) for sc in shortcuts}
+    # Build set of app IDs from shortcuts (both short and full formats)
+    # Grid filenames may use either 32-bit short IDs or 64-bit full IDs
+    # depending on whether they were created by SGM or SRM
+    shortcut_app_ids = set()
+    for sc in shortcuts:
+        unsigned32 = sc.appid & 0xFFFFFFFF
+        shortcut_app_ids.add(str(unsigned32))  # Short ID (10 digits)
+        full64 = (unsigned32 << 32) | 0x02000000
+        shortcut_app_ids.add(str(full64))  # Full ID (19-20 digits)
 
     # 2. Check Heroic games if available
     heroic_games = None

@@ -27,6 +27,8 @@ SGM_FILES=(
     art_scraper.py
     portable.py
     heroic.py
+    emulators.py
+    reconcile.py
 )
 
 echo ""
