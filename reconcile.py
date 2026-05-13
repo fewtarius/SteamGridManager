@@ -48,6 +48,7 @@ class ReconcileReport:
     """Full reconciliation report."""
     orphaned_shortcuts: List[OrphanedShortcut] = field(default_factory=list)
     orphaned_art: List[OrphanedArt] = field(default_factory=list)
+    unlinked_art: List[OrphanedArt] = field(default_factory=list)
     empty_collections: List[str] = field(default_factory=list)
     total_shortcuts: int = 0
     total_art_files: int = 0
@@ -58,12 +59,20 @@ class ReconcileReport:
         return sum(a.size_bytes for a in self.orphaned_art)
 
     @property
+    def unlinked_art_bytes(self) -> int:
+        return sum(a.size_bytes for a in self.unlinked_art)
+
+    @property
     def orphaned_shortcut_count(self) -> int:
         return len(self.orphaned_shortcuts)
 
     @property
     def orphaned_art_count(self) -> int:
         return len(self.orphaned_art)
+
+    @property
+    def unlinked_art_count(self) -> int:
+        return len(self.unlinked_art)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -268,13 +277,19 @@ def find_orphaned_shortcuts(
 
 def find_orphaned_art(
     grid_path: Path,
-    shortcut_app_ids: Set[str],
+    orphaned_shortcut_ids: Set[str],
 ) -> List[OrphanedArt]:
-    """Find grid art files that have no matching shortcut.
+    """Find grid art files that belong to orphaned shortcuts.
+
+    Only flags art files whose app IDs match shortcuts being removed.
+    Art files with unknown app IDs are left alone because they may
+    belong to games that were re-imported with different app IDs
+    (e.g., SRM vs SGM generate different IDs for the same game).
 
     Args:
         grid_path: Path to the Steam grid folder.
-        shortcut_app_ids: Set of short app ID strings from shortcuts.vdf.
+        orphaned_shortcut_ids: Set of app ID strings from shortcuts
+            being removed (both short and full ID formats).
 
     Returns:
         List of OrphanedArt entries.
@@ -294,8 +309,8 @@ def find_orphaned_art(
 
         app_id, art_type = result
 
-        # Check if this app ID has a matching shortcut
-        if app_id not in shortcut_app_ids:
+        # Check if this app ID belongs to a shortcut being removed
+        if app_id in orphaned_shortcut_ids:
             size = 0
             try:
                 if entry.is_symlink():
@@ -318,6 +333,65 @@ def find_orphaned_art(
             ))
 
     return orphans
+
+
+def find_unlinked_art(
+    grid_path: Path,
+    shortcut_app_ids: Set[str],
+) -> List[OrphanedArt]:
+    """Find grid art files with no matching shortcut (informational only).
+
+    These art files have app IDs that don't match any current shortcut.
+    They may belong to games that were re-imported with different app IDs
+    (SRM vs SGM generate different IDs), so they are NOT auto-removed.
+
+    Args:
+        grid_path: Path to the Steam grid folder.
+        shortcut_app_ids: Set of app ID strings from all current shortcuts.
+
+    Returns:
+        List of OrphanedArt entries (informational, not for auto-removal).
+    """
+    unlinked = []
+
+    if not grid_path.exists():
+        return unlinked
+
+    for entry in grid_path.iterdir():
+        if not entry.is_file() and not entry.is_symlink():
+            continue
+
+        result = classify_art_file(entry.name)
+        if result is None:
+            continue
+
+        app_id, art_type = result
+
+        # Skip art that matches a current shortcut
+        if app_id in shortcut_app_ids:
+            continue
+
+        size = 0
+        try:
+            if entry.is_symlink():
+                try:
+                    size = entry.stat().st_size
+                except OSError:
+                    size = 0
+            else:
+                size = entry.stat().st_size
+        except OSError:
+            size = 0
+
+        unlinked.append(OrphanedArt(
+            filename=entry.name,
+            app_id=app_id,
+            art_type=art_type,
+            size_bytes=size,
+            is_symlink=entry.is_symlink(),
+        ))
+
+    return unlinked
 
 
 def find_empty_collections(steam_path: Path, user_id: Optional[str] = None) -> List[str]:
@@ -500,12 +574,34 @@ def reconcile(
         shortcuts, heroic_games=heroic_games
     )
 
-    # 4. Find orphaned art
+    # 4. Find orphaned art (art belonging to shortcuts being removed)
+    # Only flag art whose app IDs match shortcuts being removed.
+    # Unknown app IDs are left alone because SRM and SGM generate
+    # different IDs for the same game, so unknown IDs may be valid.
+    orphaned_shortcut_ids = set()
+    for sc in report.orphaned_shortcuts:
+        unsigned32 = sc.appid & 0xFFFFFFFF
+        orphaned_shortcut_ids.add(str(unsigned32))
+        full64 = (unsigned32 << 32) | 0x02000000
+        orphaned_shortcut_ids.add(str(full64))
+
     report.total_art_files = sum(
         1 for f in grid_path.iterdir()
         if f.is_file() or f.is_symlink()
     ) if grid_path.exists() else 0
-    report.orphaned_art = find_orphaned_art(grid_path, shortcut_app_ids)
+    report.orphaned_art = find_orphaned_art(grid_path, orphaned_shortcut_ids)
+
+    # 5. Find unlinked art (art with no matching shortcut, but not being removed)
+    # This is informational only - these art files may belong to re-imported
+    # games with different app IDs, so we don't auto-remove them.
+    all_shortcut_ids = set()
+    for sc in shortcuts:
+        unsigned32 = sc.appid & 0xFFFFFFFF
+        all_shortcut_ids.add(str(unsigned32))
+        full64 = (unsigned32 << 32) | 0x02000000
+        all_shortcut_ids.add(str(full64))
+
+    report.unlinked_art = find_unlinked_art(grid_path, all_shortcut_ids)
 
     # 5. Find empty collections
     try:

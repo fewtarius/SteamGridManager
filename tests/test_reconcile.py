@@ -16,6 +16,7 @@ from reconcile import (
     classify_art_file,
     extract_rom_path,
     find_orphaned_art,
+    find_unlinked_art,
     find_orphaned_shortcuts,
     format_size,
     get_known_rom_tags,
@@ -220,16 +221,16 @@ class TestFindOrphanedShortcuts:
 
 class TestFindOrphanedArt:
     def test_orphaned_art_file(self):
-        """Art file whose app ID has no matching shortcut."""
+        """Art file whose app ID belongs to a removed shortcut."""
         with tempfile.TemporaryDirectory() as tmpdir:
             grid_path = Path(tmpdir)
             # Create an art file for app ID 99999
             (grid_path / "99999p.png").write_bytes(b"fake image data")
             (grid_path / "99999_hero.png").write_bytes(b"fake hero data")
 
-            # Only shortcut has app ID 12345
-            shortcut_ids = {"12345"}
-            orphans = find_orphaned_art(grid_path, shortcut_ids)
+            # Shortcut 99999 is being removed (orphaned)
+            orphaned_ids = {"99999"}
+            orphans = find_orphaned_art(grid_path, orphaned_ids)
 
             assert len(orphans) == 2
             art_types = {o.art_type for o in orphans}
@@ -237,13 +238,14 @@ class TestFindOrphanedArt:
             assert "hero" in art_types
 
     def test_matching_art_not_orphaned(self):
-        """Art file whose app ID matches a shortcut is not orphaned."""
+        """Art file whose app ID is not in the removed set is not orphaned."""
         with tempfile.TemporaryDirectory() as tmpdir:
             grid_path = Path(tmpdir)
             (grid_path / "12345p.png").write_bytes(b"data")
 
-            shortcut_ids = {"12345"}
-            orphans = find_orphaned_art(grid_path, shortcut_ids)
+            # 12345 is NOT being removed, so its art is not orphaned
+            orphaned_ids = set()
+            orphans = find_orphaned_art(grid_path, orphaned_ids)
             assert len(orphans) == 0
 
     def test_non_art_files_ignored(self):
@@ -252,8 +254,8 @@ class TestFindOrphanedArt:
             grid_path = Path(tmpdir)
             (grid_path / "shortcuts.vdf").write_bytes(b"binary data")
 
-            shortcut_ids = set()
-            orphans = find_orphaned_art(grid_path, shortcut_ids)
+            orphaned_ids = set()
+            orphans = find_orphaned_art(grid_path, orphaned_ids)
             assert len(orphans) == 0
 
     def test_symlink_art(self):
@@ -265,13 +267,54 @@ class TestFindOrphanedArt:
             link = grid_path / "99999p.png"
             link.symlink_to(target)
 
-            shortcut_ids = {"12345"}
-            orphans = find_orphaned_art(grid_path, shortcut_ids)
+            # 99999 is being removed, so its art is orphaned
+            orphaned_ids = {"99999"}
+            orphans = find_orphaned_art(grid_path, orphaned_ids)
 
             # Only the symlink for 99999 should be orphaned
             assert len(orphans) == 1
             assert orphans[0].app_id == "99999"
             assert orphans[0].is_symlink is True
+
+
+class TestFindUnlinkedArt:
+    def test_unlinked_art_file(self):
+        """Art file whose app ID has no matching shortcut is unlinked."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            grid_path = Path(tmpdir)
+            (grid_path / "99999p.png").write_bytes(b"fake image data")
+            (grid_path / "99999_hero.png").write_bytes(b"fake hero data")
+
+            # No shortcuts have app ID 99999
+            shortcut_ids = set()
+            unlinked = find_unlinked_art(grid_path, shortcut_ids)
+
+            assert len(unlinked) == 2
+            art_types = {o.art_type for o in unlinked}
+            assert "tall" in art_types
+            assert "hero" in art_types
+
+    def test_linked_art_not_unlinked(self):
+        """Art file whose app ID matches a shortcut is not unlinked."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            grid_path = Path(tmpdir)
+            (grid_path / "12345p.png").write_bytes(b"data")
+
+            shortcut_ids = {"12345"}
+            unlinked = find_unlinked_art(grid_path, shortcut_ids)
+            assert len(unlinked) == 0
+
+    def test_mixed_linked_unlinked(self):
+        """Only art with no matching shortcut is unlinked."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            grid_path = Path(tmpdir)
+            (grid_path / "12345p.png").write_bytes(b"data")
+            (grid_path / "99999p.png").write_bytes(b"data")
+
+            shortcut_ids = {"12345"}
+            unlinked = find_unlinked_art(grid_path, shortcut_ids)
+            assert len(unlinked) == 1
+            assert unlinked[0].app_id == "99999"
 
 
 # ═══════════════════════════════════════════════════════════════════════

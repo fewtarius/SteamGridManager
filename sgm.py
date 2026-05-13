@@ -2813,6 +2813,10 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         print(f"  {RED}Orphaned art:    {report.orphaned_art_count} ({art_size}){RESET}")
     else:
         print(f"  {GREEN}Orphaned art:    0{RESET}")
+    if report.unlinked_art:
+        from steam import format_size
+        unlinked_size = format_size(report.unlinked_art_bytes)
+        print(f"  {YELLOW}Unlinked art:    {report.unlinked_art_count} ({unlinked_size}){RESET}")
 
     # Collections summary
     if report.total_collections:
@@ -2852,13 +2856,30 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         for a in report.orphaned_art:
             by_app.setdefault(a.app_id, []).append(a)
 
-        print(f"\n  {BOLD}Orphaned Art Files{RESET}\n")
-        print(f"  {len(by_app)} app ID(s) with no matching shortcut:\n")
+        print(f"\n  {BOLD}Orphaned Art Files{RESET} (belong to removed shortcuts)\n")
+        print(f"  {len(by_app)} app ID(s) with removed shortcuts:\n")
         for app_id, arts in sorted(by_app.items())[:30]:
             types = ", ".join(sorted(set(a.art_type for a in arts)))
             print(f"    {app_id}  ({types})")
         if len(by_app) > 30:
             print(f"    ... and {len(by_app) - 30} more")
+
+    # ── Unlinked art detail ──────────────────────────────────────────
+    if report.unlinked_art:
+        # Group by app ID
+        by_app: dict[str, list] = {}
+        for a in report.unlinked_art:
+            by_app.setdefault(a.app_id, []).append(a)
+
+        print(f"\n  {BOLD}Unlinked Art Files{RESET} (no matching shortcut, may be valid)\n")
+        print(f"  {len(by_app)} app ID(s) with no current shortcut.\n")
+        print(f"  {GREY}These may belong to re-imported games with different IDs.{RESET}")
+        print(f"  {GREY}Use --clean-unlinked to remove them (not recommended).{RESET}\n")
+        for app_id, arts in sorted(by_app.items())[:10]:
+            types = ", ".join(sorted(set(a.art_type for a in arts)))
+            print(f"    {app_id}  ({types})")
+        if len(by_app) > 10:
+            print(f"    ... and {len(by_app) - 10} more")
 
     # ── Empty collections ────────────────────────────────────────────
     if report.empty_collections:
@@ -2867,7 +2888,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
             print(f"    {name}")
 
     # ── Nothing found ───────────────────────────────────────────────
-    if not report.orphaned_shortcuts and not report.orphaned_art and not report.empty_collections:
+    if not report.orphaned_shortcuts and not report.orphaned_art and not report.empty_collections and not report.unlinked_art:
         print(f"\n  {GREEN}Everything is clean! No orphans found.{RESET}\n")
         return 0
 
@@ -2875,25 +2896,28 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     clean_shortcuts = getattr(args, 'clean_shortcuts', False)
     clean_art = getattr(args, 'clean_art', False)
     clean_collections = getattr(args, 'clean_collections', False)
+    clean_unlinked = getattr(args, 'clean_unlinked', False)
     clean_all = getattr(args, 'clean', False)
     dry_run = getattr(args, 'dry_run', False)
     force = getattr(args, 'force', False)
 
-    # --clean implies all three
+    # --clean implies shortcuts + art + collections (NOT unlinked)
     if clean_all:
         clean_shortcuts = True
         clean_art = True
         clean_collections = True
 
     # If no --clean flags, just show the report
-    if not (clean_shortcuts or clean_art or clean_collections):
-        print(f"\n  Use {CYAN}--clean{RESET} to remove all orphans, or specific flags:")
+    if not (clean_shortcuts or clean_art or clean_collections or clean_unlinked):
+        print(f"\n  Use {CYAN}--clean{RESET} to remove orphans, or specific flags:")
         if report.orphaned_shortcuts:
             print(f"    {CYAN}--clean-shortcuts{RESET}  Remove {report.orphaned_shortcut_count} orphaned shortcut(s)")
         if report.orphaned_art:
             print(f"    {CYAN}--clean-art{RESET}        Remove {report.orphaned_art_count} orphaned art file(s)")
         if report.empty_collections:
             print(f"    {CYAN}--clean-collections{RESET} Remove {len(report.empty_collections)} empty collection(s)")
+        if report.unlinked_art:
+            print(f"    {CYAN}--clean-unlinked{RESET}   Remove {report.unlinked_art_count} unlinked art file(s) (caution)")
         print()
         return 0
 
@@ -2903,9 +2927,11 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         if clean_shortcuts and report.orphaned_shortcuts:
             parts.append(f"{report.orphaned_shortcut_count} shortcut(s)")
         if clean_art and report.orphaned_art:
-            parts.append(f"{report.orphaned_art_count} art file(s)")
+            parts.append(f"{report.orphaned_art_count} orphaned art file(s)")
         if clean_collections and report.empty_collections:
             parts.append(f"{len(report.empty_collections)} collection(s)")
+        if clean_unlinked and report.unlinked_art:
+            parts.append(f"{report.unlinked_art_count} unlinked art file(s)")
         msg = ", ".join(parts)
         answer = input(f"\n  Remove {msg}? [y/N] ").strip().lower()
         if answer not in ('y', 'yes'):
@@ -2921,6 +2947,8 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
             print(f"    {report.orphaned_art_count} orphaned art file(s) from grid folder")
         if clean_collections and report.empty_collections:
             print(f"    {len(report.empty_collections)} empty collection(s)")
+        if clean_unlinked and report.unlinked_art:
+            print(f"    {report.unlinked_art_count} unlinked art file(s) from grid folder")
         print(f"\n  (dry run - no changes made)\n")
         return 0
 
@@ -2936,6 +2964,12 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     if clean_art and report.orphaned_art:
         removed, errors = remove_orphaned_art(grid_path, report.orphaned_art)
         print(f"  Removed {removed} orphaned art file(s)")
+        if errors:
+            print(f"  {YELLOW}Warning: {errors} file(s) could not be deleted{RESET}")
+
+    if clean_unlinked and report.unlinked_art:
+        removed, errors = remove_orphaned_art(grid_path, report.unlinked_art)
+        print(f"  Removed {removed} unlinked art file(s)")
         if errors:
             print(f"  {YELLOW}Warning: {errors} file(s) could not be deleted{RESET}")
 
@@ -3265,8 +3299,10 @@ def main() -> int:
             'Reconcile Steam library with reality.\n\n'
             'Detects orphaned entries from games removed outside Steam:\n'
             '  - Shortcuts whose ROM/exe no longer exists\n'
-            '  - Grid art files with no matching shortcut\n'
+            '  - Grid art files belonging to removed shortcuts\n'
             '  - Empty Steam collections\n\n'
+            'Also reports unlinked art (no matching shortcut) which may\n'
+            'belong to re-imported games with different app IDs.\n\n'
             'Examples:\n'
             '  sgm reconcile                    # show what is orphaned\n'
             '  sgm reconcile --clean             # remove all orphans\n'
@@ -3289,6 +3325,9 @@ def main() -> int:
     sub_reconcile.add_argument(
         '--clean-collections', action='store_true',
         help='Remove only empty Steam collections')
+    sub_reconcile.add_argument(
+        '--clean-unlinked', action='store_true',
+        help='Remove unlinked art files (no matching shortcut - use with caution)')
     sub_reconcile.add_argument(
         '--dry-run', action='store_true',
         help='Show what would be removed without making changes')
