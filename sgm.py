@@ -2745,6 +2745,211 @@ def cmd_heroic(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_reconcile(args: argparse.Namespace) -> int:
+    """Reconcile Steam shortcuts and grid art with reality.
+
+    Detects orphaned shortcuts (games no longer on disk), orphaned art
+    files (images with no matching shortcut), and empty collections.
+    Can clean them up with --clean or specific --clean-* flags.
+    """
+    from config import config_exists, get_resolved_config
+    from steam import find_steam_path, find_grid_path
+    from reconcile import (
+        reconcile,
+        remove_orphaned_shortcuts, remove_orphaned_art,
+        remove_empty_collections,
+    )
+    from shortcuts import get_existing_shortcuts
+
+    try:
+        if config_exists():
+            config = get_resolved_config()
+        else:
+            steam_path = find_steam_path()
+            config = {
+                'steam_path': str(steam_path),
+                'steam_user_id': 'auto',
+            }
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return 1
+
+    steam_path = Path(config['steam_path'])
+    user_id = config.get('steam_user_id', 'auto')
+    uid = user_id if user_id != 'auto' else None
+
+    try:
+        grid_path = find_grid_path(steam_path, uid)
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return 1
+
+    # Run reconciliation
+    report = reconcile(steam_path, grid_path, uid, check_heroic=True)
+
+    # ── Display report ──────────────────────────────────────────────
+    GREEN = "\033[32m"
+    YELLOW = "\033[33m"
+    RED = "\033[31m"
+    CYAN = "\033[36m"
+    GREY = "\033[90m"
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+
+    print(f"\n  {BOLD}Reconciliation Report{RESET}\n")
+
+    # Shortcuts summary
+    print(f"  Shortcuts:      {report.total_shortcuts}")
+    if report.orphaned_shortcuts:
+        print(f"  {RED}Orphaned:        {report.orphaned_shortcut_count}{RESET}")
+    else:
+        print(f"  {GREEN}Orphaned:        0{RESET}")
+
+    # Art summary
+    print(f"  Grid art files:  {report.total_art_files}")
+    if report.orphaned_art:
+        from steam import format_size
+        art_size = format_size(report.orphaned_art_bytes)
+        print(f"  {RED}Orphaned art:    {report.orphaned_art_count} ({art_size}){RESET}")
+    else:
+        print(f"  {GREEN}Orphaned art:    0{RESET}")
+
+    # Collections summary
+    if report.total_collections:
+        print(f"  Collections:     {report.total_collections}")
+        if report.empty_collections:
+            print(f"  {YELLOW}Empty:           {len(report.empty_collections)}{RESET}")
+        else:
+            print(f"  {GREEN}Empty:           0{RESET}")
+
+    # ── Orphaned shortcuts detail ───────────────────────────────────
+    if report.orphaned_shortcuts:
+        # Group by reason
+        by_reason: dict[str, list] = {}
+        for o in report.orphaned_shortcuts:
+            by_reason.setdefault(o.reason, []).append(o)
+
+        reason_labels = {
+            "rom_missing": "ROM file not found",
+            "exe_missing": "Executable not found",
+            "heroic_uninstalled": "Heroic game uninstalled",
+        }
+
+        print(f"\n  {BOLD}Orphaned Shortcuts{RESET}\n")
+        for reason, orphans in sorted(by_reason.items()):
+            label = reason_labels.get(reason, reason)
+            print(f"  {YELLOW}{label}:{RESET}")
+            for o in sorted(orphans, key=lambda x: x.appname)[:20]:
+                tag_info = f" [{o.system_tag}]" if o.system_tag else ""
+                print(f"    {o.appname}{tag_info}")
+            if len(orphans) > 20:
+                print(f"    ... and {len(orphans) - 20} more")
+
+    # ── Orphaned art detail ─────────────────────────────────────────
+    if report.orphaned_art:
+        # Group by app ID
+        by_app: dict[str, list] = {}
+        for a in report.orphaned_art:
+            by_app.setdefault(a.app_id, []).append(a)
+
+        print(f"\n  {BOLD}Orphaned Art Files{RESET}\n")
+        print(f"  {len(by_app)} app ID(s) with no matching shortcut:\n")
+        for app_id, arts in sorted(by_app.items())[:30]:
+            types = ", ".join(sorted(set(a.art_type for a in arts)))
+            print(f"    {app_id}  ({types})")
+        if len(by_app) > 30:
+            print(f"    ... and {len(by_app) - 30} more")
+
+    # ── Empty collections ────────────────────────────────────────────
+    if report.empty_collections:
+        print(f"\n  {BOLD}Empty Collections{RESET}\n")
+        for name in sorted(report.empty_collections):
+            print(f"    {name}")
+
+    # ── Nothing found ───────────────────────────────────────────────
+    if not report.orphaned_shortcuts and not report.orphaned_art and not report.empty_collections:
+        print(f"\n  {GREEN}Everything is clean! No orphans found.{RESET}\n")
+        return 0
+
+    # ── Determine what to clean ─────────────────────────────────────
+    clean_shortcuts = getattr(args, 'clean_shortcuts', False)
+    clean_art = getattr(args, 'clean_art', False)
+    clean_collections = getattr(args, 'clean_collections', False)
+    clean_all = getattr(args, 'clean', False)
+    dry_run = getattr(args, 'dry_run', False)
+    force = getattr(args, 'force', False)
+
+    # --clean implies all three
+    if clean_all:
+        clean_shortcuts = True
+        clean_art = True
+        clean_collections = True
+
+    # If no --clean flags, just show the report
+    if not (clean_shortcuts or clean_art or clean_collections):
+        print(f"\n  Use {CYAN}--clean{RESET} to remove all orphans, or specific flags:")
+        if report.orphaned_shortcuts:
+            print(f"    {CYAN}--clean-shortcuts{RESET}  Remove {report.orphaned_shortcut_count} orphaned shortcut(s)")
+        if report.orphaned_art:
+            print(f"    {CYAN}--clean-art{RESET}        Remove {report.orphaned_art_count} orphaned art file(s)")
+        if report.empty_collections:
+            print(f"    {CYAN}--clean-collections{RESET} Remove {len(report.empty_collections)} empty collection(s)")
+        print()
+        return 0
+
+    # ── Confirmation ────────────────────────────────────────────────
+    if not force and not dry_run:
+        parts = []
+        if clean_shortcuts and report.orphaned_shortcuts:
+            parts.append(f"{report.orphaned_shortcut_count} shortcut(s)")
+        if clean_art and report.orphaned_art:
+            parts.append(f"{report.orphaned_art_count} art file(s)")
+        if clean_collections and report.empty_collections:
+            parts.append(f"{len(report.empty_collections)} collection(s)")
+        msg = ", ".join(parts)
+        answer = input(f"\n  Remove {msg}? [y/N] ").strip().lower()
+        if answer not in ('y', 'yes'):
+            print("  Aborted.\n")
+            return 0
+
+    # ── Dry run ─────────────────────────────────────────────────────
+    if dry_run:
+        print(f"\n  {BOLD}[DRY RUN] Would remove:{RESET}")
+        if clean_shortcuts and report.orphaned_shortcuts:
+            print(f"    {report.orphaned_shortcut_count} orphaned shortcut(s) from shortcuts.vdf")
+        if clean_art and report.orphaned_art:
+            print(f"    {report.orphaned_art_count} orphaned art file(s) from grid folder")
+        if clean_collections and report.empty_collections:
+            print(f"    {len(report.empty_collections)} empty collection(s)")
+        print(f"\n  (dry run - no changes made)\n")
+        return 0
+
+    # ── Execute cleanup ─────────────────────────────────────────────
+    print()
+    if clean_shortcuts and report.orphaned_shortcuts:
+        all_shortcuts = get_existing_shortcuts(steam_path, uid)
+        removed = remove_orphaned_shortcuts(
+            steam_path, all_shortcuts, report.orphaned_shortcuts, uid
+        )
+        print(f"  Removed {removed} orphaned shortcut(s) from shortcuts.vdf")
+
+    if clean_art and report.orphaned_art:
+        removed, errors = remove_orphaned_art(grid_path, report.orphaned_art)
+        print(f"  Removed {removed} orphaned art file(s)")
+        if errors:
+            print(f"  {YELLOW}Warning: {errors} file(s) could not be deleted{RESET}")
+
+    if clean_collections and report.empty_collections:
+        removed = remove_empty_collections(
+            steam_path, report.empty_collections, uid
+        )
+        print(f"  Removed {removed} empty collection(s)")
+
+    notify_steam_reload()
+    print(f"\n  {GREEN}Done.{RESET} Restart Steam to see changes.\n")
+    return 0
+
+
 def main() -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -3051,6 +3256,46 @@ def main() -> int:
     sub_heroic.add_argument('--force', action='store_true',
                             help='Force re-import even if game already exists in shortcuts')
     sub_heroic.set_defaults(func=cmd_heroic)
+
+    # reconcile (housekeeping)
+    sub_reconcile = subparsers.add_parser(
+        'reconcile',
+        help='Find and clean orphaned shortcuts, art, and collections',
+        description=(
+            'Reconcile Steam library with reality.\n\n'
+            'Detects orphaned entries from games removed outside Steam:\n'
+            '  - Shortcuts whose ROM/exe no longer exists\n'
+            '  - Grid art files with no matching shortcut\n'
+            '  - Empty Steam collections\n\n'
+            'Examples:\n'
+            '  sgm reconcile                    # show what is orphaned\n'
+            '  sgm reconcile --clean             # remove all orphans\n'
+            '  sgm reconcile --clean-art        # remove only orphaned art\n'
+            '  sgm reconcile --clean-shortcuts   # remove only orphaned shortcuts\n'
+            '  sgm reconcile --dry-run --clean   # preview what would be removed\n'
+            '  sgm reconcile --clean --force     # skip confirmation prompt'
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub_reconcile.add_argument(
+        '--clean', action='store_true',
+        help='Remove all orphaned entries (shortcuts + art + collections)')
+    sub_reconcile.add_argument(
+        '--clean-shortcuts', action='store_true',
+        help='Remove only orphaned shortcuts from shortcuts.vdf')
+    sub_reconcile.add_argument(
+        '--clean-art', action='store_true',
+        help='Remove only orphaned art files from grid folder')
+    sub_reconcile.add_argument(
+        '--clean-collections', action='store_true',
+        help='Remove only empty Steam collections')
+    sub_reconcile.add_argument(
+        '--dry-run', action='store_true',
+        help='Show what would be removed without making changes')
+    sub_reconcile.add_argument(
+        '--force', '-y', action='store_true',
+        help='Skip confirmation prompt')
+    sub_reconcile.set_defaults(func=cmd_reconcile)
 
     args = parser.parse_args()
     
