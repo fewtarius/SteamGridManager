@@ -1599,6 +1599,13 @@ def cmd_rom(args: argparse.Namespace) -> int:
                     exe = sys_def.emulator.get_steam_exe(rom.title_id)
                 else:
                     exe = sys_def.emulator.get_steam_exe(str(rom.path))
+
+                # Normalize SteamOS path symlinks so app IDs are consistent
+                # regardless of whether the path was resolved through /var/run/
+                # or /run/media/deck/ symlinks.
+                exe = exe.replace("/var/run/media/", "/run/media/")
+                exe = exe.replace("/run/media/deck/", "/run/media/")
+
                 launch_opts = ""
 
                 appid = generate_shortcut_id(exe, rom.steam_title)
@@ -1608,7 +1615,11 @@ def cmd_rom(args: argparse.Namespace) -> int:
                 if rom.title_id and sys_def.emulator.launch_mode == "title_id":
                     start_dir = f'"{Path(sys_def.emulator.emulator).parent}"'
                 else:
-                    start_dir = f'"{str(rom.path.parent)}"'
+                    raw_dir = str(rom.path.parent)
+                    # Normalize SteamOS path symlinks
+                    raw_dir = raw_dir.replace("/var/run/media/", "/run/media/")
+                    raw_dir = raw_dir.replace("/run/media/deck/", "/run/media/")
+                    start_dir = f'"{raw_dir}"'
 
                 sc = SteamShortcut(
                     appid=appid,
@@ -3013,6 +3024,83 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         for name in sorted(report.empty_collections):
             print(f"    {name}")
 
+    # ── Determine what to clean ─────────────────────────────────────
+    clean_shortcuts = getattr(args, 'clean_shortcuts', False)
+    clean_art = getattr(args, 'clean_art', False)
+    clean_collections = getattr(args, 'clean_collections', False)
+    clean_unlinked = getattr(args, 'clean_unlinked', False)
+    clean_all = getattr(args, 'clean', False)
+    dry_run = getattr(args, 'dry_run', False)
+    force = getattr(args, 'force', False)
+    dedup = getattr(args, 'dedup', False)
+
+    # ── Dedup mode (separate from orphan cleanup) ──────────────────
+    if dedup:
+        from reconcile import find_duplicate_shortcuts, deduplicate_shortcuts
+
+        duplicates = find_duplicate_shortcuts(steam_path, uid)
+
+        if not duplicates:
+            print(f"\n  {GREEN}No duplicate shortcuts found. Everything looks clean!{RESET}\n")
+            return 0
+
+        total_to_remove = sum(len(d.remove) for d in duplicates)
+        total_kept = len(duplicates)
+
+        # Group by reason
+        by_reason: dict[str, list] = {}
+        for d in duplicates:
+            by_reason.setdefault(d.reason, []).append(d)
+
+        reason_labels = {
+            "legacy tag": "Legacy tag name (e.g. 'Commodore 64' instead of 'C64')",
+            "non-canonical path": "Non-canonical path (/var/run/ or /deck/)",
+            "duplicate": "Exact duplicate",
+        }
+
+        print(f"\n  {BOLD}Duplicate Shortcuts{RESET}\n")
+        print(f"  Found {total_kept} games with {total_to_remove} duplicate entries:\n")
+
+        for reason, dups in sorted(by_reason.items()):
+            label = reason_labels.get(reason, reason)
+            count = sum(len(d.remove) for d in dups)
+            print(f"  {YELLOW}{label}:{RESET} {count} to remove")
+
+        # Show some examples
+        print(f"\n  {BOLD}Examples:{RESET}")
+        shown = 0
+        for d in sorted(duplicates, key=lambda x: x.appname):
+            keep_tag = list(d.keep.tags.values())[0] if d.keep.tags else ""
+            remove_tags = [list(r.tags.values())[0] if r.tags else "" for r in d.remove[:2]]
+            remove_str = ", ".join(remove_tags)
+            print(f"    {d.appname} [{d.canonical_system}]: keeping [{keep_tag}], removing [{remove_str}]")
+            shown += 1
+            if shown >= 15:
+                remaining = total_kept - shown
+                if remaining > 0:
+                    print(f"    ... and {remaining} more")
+                break
+
+        print(f"\n  After dedup: {report.total_shortcuts - total_to_remove} shortcuts "
+              f"(from {report.total_shortcuts})")
+
+        if dry_run:
+            print(f"\n  {CYAN}[DRY RUN]{RESET} Would remove {total_to_remove} duplicate shortcuts.")
+            return 0
+
+        if not force:
+            answer = input(f"\n  Remove {total_to_remove} duplicate shortcuts? [y/N] ").strip().lower()
+            if answer not in ('y', 'yes'):
+                print("  Aborted.\n")
+                return 0
+
+        removed, kept = deduplicate_shortcuts(steam_path, uid)
+        print(f"\n  {GREEN}Removed {removed} duplicate shortcuts.{RESET}")
+        print(f"  {kept} shortcuts remaining.")
+        notify_steam_reload()
+        print(f"\n  {GREEN}Done.{RESET} Restart Steam to see changes.\n")
+        return 0
+
     # ── Nothing found ───────────────────────────────────────────────
     if not report.orphaned_shortcuts and not report.orphaned_art and not report.empty_collections and not report.unlinked_art:
         print(f"\n  {GREEN}Everything is clean! No orphans found.{RESET}\n")
@@ -3026,6 +3114,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     clean_all = getattr(args, 'clean', False)
     dry_run = getattr(args, 'dry_run', False)
     force = getattr(args, 'force', False)
+    dedup = getattr(args, 'dedup', False)
 
     # --clean implies shortcuts + art + collections (NOT unlinked)
     if clean_all:
@@ -3452,6 +3541,7 @@ def main() -> int:
             '  sgm reconcile --clean             # remove all orphans\n'
             '  sgm reconcile --clean-art        # remove only orphaned art\n'
             '  sgm reconcile --clean-shortcuts   # remove only orphaned shortcuts\n'
+            '  sgm reconcile --dedup             # remove duplicate shortcuts\n'
             '  sgm reconcile --dry-run --clean   # preview what would be removed\n'
             '  sgm reconcile --clean --force     # skip confirmation prompt'
         ),
@@ -3472,6 +3562,9 @@ def main() -> int:
     sub_reconcile.add_argument(
         '--clean-unlinked', action='store_true',
         help='Remove unlinked art files (no matching shortcut - use with caution)')
+    sub_reconcile.add_argument(
+        '--dedup', action='store_true',
+        help='Find and remove duplicate shortcuts (same game, different tag or path)')
     sub_reconcile.add_argument(
         '--dry-run', action='store_true',
         help='Show what would be removed without making changes')

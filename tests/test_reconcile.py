@@ -405,3 +405,154 @@ class TestFormatSize:
 
     def test_gigabytes(self):
         assert format_size(1024 * 1024 * 1024) == "1.0 GB"
+# ═══════════════════════════════════════════════════════════════════════
+# Shortcut deduplication tests
+# ═══════════════════════════════════════════════════════════════════════
+
+from reconcile import (
+    DuplicateGroup,
+    _normalize_rom_path,
+    find_duplicate_shortcuts,
+    deduplicate_shortcuts,
+)
+from shortcuts import SteamShortcut
+
+
+class TestNormalizeRomPath:
+    def test_var_run_media(self):
+        assert _normalize_rom_path(
+            '"/usr/bin/flatpak" run org.libretro.RetroArch -L /vice_x64sc_libretro.so "/var/run/media/primary/Roms/c64/Game.d64"'
+        ) == '"/usr/bin/flatpak" run org.libretro.RetroArch -L /vice_x64sc_libretro.so "/run/media/primary/Roms/c64/Game.d64"'
+
+    def test_run_media_deck(self):
+        assert _normalize_rom_path(
+            '"/usr/bin/flatpak" run org.libretro.RetroArch -L /vice_x64sc_libretro.so "/run/media/deck/primary/Roms/c64/Game.d64"'
+        ) == '"/usr/bin/flatpak" run org.libretro.RetroArch -L /vice_x64sc_libretro.so "/run/media/primary/Roms/c64/Game.d64"'
+
+    def test_already_normalized(self):
+        path = '"/usr/bin/flatpak" run org.libretro.RetroArch -L /vice_x64sc_libretro.so "/run/media/primary/Roms/c64/Game.d64"'
+        assert _normalize_rom_path(path) == path
+
+    def test_no_media_path(self):
+        path = '"/usr/bin/flatpak" run org.libretro.RetroArch -L /vice_x64sc_libretro.so "/home/user/Roms/game.rom"'
+        assert _normalize_rom_path(path) == path
+
+
+class TestFindDuplicateShortcuts:
+    """Test find_duplicate_shortcuts with mocked Steam data."""
+
+    def _make_shortcut(self, name, tag, exe, appid=None):
+        """Helper to create a SteamShortcut for testing."""
+        if appid is None:
+            from shortcuts import generate_shortcut_id
+            appid = generate_shortcut_id(exe, name)
+        return SteamShortcut(
+            appid=appid,
+            appname=name,
+            exe=exe,
+            start_dir='"/run/media/primary/Roms"',
+            launch_options="",
+            tags={"0": tag},
+        )
+
+    @patch("shortcuts.get_existing_shortcuts")
+    @patch("emulators.get_registry")
+    def test_no_duplicates(self, mock_registry, mock_shortcuts):
+        """No duplicates should return empty list."""
+        mock_sys = MagicMock()
+        mock_sys.get_steam_category.return_value = "NES"
+        mock_sys.all_category_tags.return_value = {"NES", "Nintendo Entertainment System"}
+        mock_registry.return_value.list_systems.return_value = {"nes": mock_sys}
+
+        shortcuts = [
+            self._make_shortcut("Mario", "NES", '"/usr/bin/flatpak" run org.libretro.RetroArch -L /fceumm_libretro.so "/run/media/primary/Roms/nes/Mario.nes"'),
+        ]
+        mock_shortcuts.return_value = shortcuts
+
+        dups = find_duplicate_shortcuts(Path("/fake/steam"))
+        assert len(dups) == 0
+
+    @patch("shortcuts.get_existing_shortcuts")
+    @patch("emulators.get_registry")
+    def test_legacy_tag_duplicate(self, mock_registry, mock_shortcuts):
+        """Legacy tag entry should be removed, canonical kept."""
+        mock_sys = MagicMock()
+        mock_sys.get_steam_category.return_value = "C64"
+        mock_sys.all_category_tags.return_value = {"C64", "Commodore 64"}
+        mock_registry.return_value.list_systems.return_value = {"c64": mock_sys}
+
+        canonical_exe = '"/usr/bin/flatpak" run org.libretro.RetroArch -L /vice_x64sc_libretro.so "/run/media/primary/Roms/c64/Game.d64"'
+        legacy_exe = '"/usr/bin/flatpak" run org.libretro.RetroArch -L /vice_x64sc_libretro.so "/run/media/primary/Roms/c64/Game.d64"'
+
+        shortcuts = [
+            self._make_shortcut("Game", "C64", canonical_exe),
+            self._make_shortcut("Game", "Commodore 64", legacy_exe),
+        ]
+        mock_shortcuts.return_value = shortcuts
+
+        dups = find_duplicate_shortcuts(Path("/fake/steam"))
+        assert len(dups) == 1
+        assert dups[0].appname == "Game"
+        assert dups[0].canonical_system == "C64"
+        assert list(dups[0].keep.tags.values())[0] == "C64"
+        assert list(dups[0].remove[0].tags.values())[0] == "Commodore 64"
+        assert dups[0].reason == "legacy tag"
+
+    @patch("shortcuts.get_existing_shortcuts")
+    @patch("emulators.get_registry")
+    def test_path_duplicate(self, mock_registry, mock_shortcuts):
+        """Non-canonical path entry should be removed."""
+        mock_sys = MagicMock()
+        mock_sys.get_steam_category.return_value = "NES"
+        mock_sys.all_category_tags.return_value = {"NES"}
+        mock_registry.return_value.list_systems.return_value = {"nes": mock_sys}
+
+        canonical_exe = '"/usr/bin/flatpak" run org.libretro.RetroArch -L /fceumm_libretro.so "/run/media/primary/Roms/nes/Game.nes"'
+        var_run_exe = '"/usr/bin/flatpak" run org.libretro.RetroArch -L /fceumm_libretro.so "/var/run/media/primary/Roms/nes/Game.nes"'
+
+        shortcuts = [
+            self._make_shortcut("Game", "NES", canonical_exe),
+            self._make_shortcut("Game", "NES", var_run_exe),
+        ]
+        mock_shortcuts.return_value = shortcuts
+
+        dups = find_duplicate_shortcuts(Path("/fake/steam"))
+        assert len(dups) == 1
+        assert dups[0].reason == "non-canonical path"
+        # Should keep the canonical path
+        assert "/run/media/primary/" in dups[0].keep.exe
+        assert "/var/run/" in dups[0].remove[0].exe
+
+    @patch("shortcuts.write_shortcuts_vdf")
+    @patch("shortcuts.find_shortcuts_vdf")
+    @patch("shortcuts.get_existing_shortcuts")
+    @patch("emulators.get_registry")
+    def test_deduplicate_shortcuts_dry_run(self, mock_registry, mock_shortcuts, mock_vdf_path, mock_write):
+        """Dry run should not modify shortcuts."""
+        mock_sys = MagicMock()
+        mock_sys.get_steam_category.return_value = "C64"
+        mock_sys.all_category_tags.return_value = {"C64", "Commodore 64"}
+        mock_registry.return_value.list_systems.return_value = {"c64": mock_sys}
+
+        canonical_exe = '"/usr/bin/flatpak" run org.libretro.RetroArch -L /vice_x64sc_libretro.so "/run/media/primary/Roms/c64/Game.d64"'
+        legacy_exe = '"/usr/bin/flatpak" run org.libretro.RetroArch -L /vice_x64sc_libretro.so "/run/media/primary/Roms/c64/Game.d64"'
+
+        shortcuts = [
+            SteamShortcut(
+                appid=1001, appname="Game", exe=canonical_exe,
+                start_dir='"/run/media/primary/Roms"', launch_options="",
+                tags={"0": "C64"},
+            ),
+            SteamShortcut(
+                appid=1002, appname="Game", exe=legacy_exe,
+                start_dir='"/run/media/primary/Roms"', launch_options="",
+                tags={"0": "Commodore 64"},
+            ),
+        ]
+        mock_shortcuts.return_value = shortcuts
+
+        removed, kept = deduplicate_shortcuts(Path("/fake/steam"), dry_run=True)
+        assert removed == 1
+        assert kept == 1
+        # Should not have written anything
+        mock_write.assert_not_called()

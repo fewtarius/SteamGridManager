@@ -526,6 +526,185 @@ def remove_empty_collections(
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Shortcut Deduplication
+# ═══════════════════════════════════════════════════════════════════════
+
+@dataclass
+class DuplicateGroup:
+    """A group of duplicate shortcuts for the same game+system."""
+    appname: str
+    canonical_system: str
+    keep: object  # SteamShortcut to keep
+    remove: List[object]  # SteamShortcut entries to remove
+    reason: str  # Why we're keeping this one
+
+
+def _normalize_rom_path(exe: str) -> str:
+    """Normalize ROM paths in exe strings.
+
+    Resolves SteamOS path symlinks so /var/run/media/ and /run/media/deck/
+    both normalize to /run/media/.
+    """
+    # /var/run/media -> /run/media (symlink on SteamOS)
+    exe = exe.replace("/var/run/media/", "/run/media/")
+    # /run/media/deck -> /run/media (deck is a symlink to primary)
+    exe = exe.replace("/run/media/deck/", "/run/media/")
+    return exe
+
+
+def find_duplicate_shortcuts(
+    steam_path: Path,
+    user_id: Optional[str] = None,
+) -> List[DuplicateGroup]:
+    """Find duplicate shortcuts (same game name + canonical system).
+
+    Groups shortcuts by (appname, canonical_system_tag) and identifies
+    the best entry to keep. Prefers:
+    1. Canonical tag name (e.g. "C64" over "Commodore 64")
+    2. Normalized path (e.g. /run/media/ over /var/run/media/)
+    3. Shorter exe string (cleaner format)
+
+    Args:
+        steam_path: Path to Steam installation.
+        user_id: Specific user ID, or None to auto-detect.
+
+    Returns:
+        List of DuplicateGroup entries describing what to keep and remove.
+    """
+    from shortcuts import get_existing_shortcuts
+    from emulators import get_registry
+
+    shortcuts = get_existing_shortcuts(steam_path, user_id)
+
+    # Build legacy -> canonical mapping
+    registry = get_registry()
+    legacy_to_canonical: Dict[str, str] = {}
+    canonical_tags: Set[str] = set()
+    for sys_id, sys_def in registry.list_systems().items():
+        canonical = sys_def.get_steam_category()
+        canonical_tags.add(canonical)
+        for tag in sys_def.all_category_tags():
+            if tag != canonical:
+                legacy_to_canonical[tag] = canonical
+
+    # Group shortcuts by (appname, canonical_system)
+    groups: Dict[Tuple[str, str], List] = {}
+    for sc in shortcuts:
+        tag = list(sc.tags.values())[0] if sc.tags else ""
+        canonical = legacy_to_canonical.get(tag, tag)
+        key = (sc.appname, canonical)
+        groups.setdefault(key, []).append(sc)
+
+    # Find duplicates and pick the best entry to keep
+    duplicates: List[DuplicateGroup] = []
+    for (appname, canonical), entries in groups.items():
+        if len(entries) < 2:
+            continue
+
+        # Score each entry to determine which to keep
+        best_idx = 0
+        best_score = -999999
+        for i, sc in enumerate(entries):
+            score = 0
+            tag = list(sc.tags.values())[0] if sc.tags else ""
+
+            # Prefer canonical tag name
+            if tag == canonical:
+                score += 100
+
+            # Prefer normalized path (no /var/run/ or /deck/)
+            norm_exe = _normalize_rom_path(sc.exe)
+            if norm_exe == sc.exe:
+                score += 50  # Already normalized
+
+            # Prefer shorter exe (cleaner format)
+            score -= len(sc.exe)
+
+            if score > best_score:
+                best_score = score
+                best_idx = i
+
+        keep = entries[best_idx]
+        remove = [e for i, e in enumerate(entries) if i != best_idx]
+
+        # Determine reason
+        keep_tag = list(keep.tags.values())[0] if keep.tags else ""
+        remove_tags = set()
+        for r in remove:
+            t = list(r.tags.values())[0] if r.tags else ""
+            remove_tags.add(t)
+
+        if remove_tags and all(legacy_to_canonical.get(t, t) != t for t in remove_tags if t):
+            reason = "legacy tag"
+        elif any("/var/run/" in r.exe or "/run/media/deck/" in r.exe for r in remove):
+            reason = "non-canonical path"
+        else:
+            reason = "duplicate"
+
+        duplicates.append(DuplicateGroup(
+            appname=appname,
+            canonical_system=canonical,
+            keep=keep,
+            remove=remove,
+            reason=reason,
+        ))
+
+    return duplicates
+
+
+def deduplicate_shortcuts(
+    steam_path: Path,
+    user_id: Optional[str] = None,
+    dry_run: bool = False,
+) -> Tuple[int, int]:
+    """Remove duplicate shortcuts, keeping the best entry for each game.
+
+    Args:
+        steam_path: Path to Steam installation.
+        user_id: Specific user ID, or None to auto-detect.
+        dry_run: If True, report what would be removed without removing.
+
+    Returns:
+        Tuple of (removed_count, kept_count).
+    """
+    from shortcuts import get_existing_shortcuts, write_shortcuts_vdf, find_shortcuts_vdf
+
+    duplicates = find_duplicate_shortcuts(steam_path, user_id)
+
+    if not duplicates:
+        return 0, 0
+
+    # Collect all app IDs to remove
+    remove_ids: Set[int] = set()
+    for dup in duplicates:
+        for sc in dup.remove:
+            remove_ids.add(sc.appid)
+
+    if not remove_ids:
+        return 0, 0
+
+    # Load all shortcuts and filter out duplicates
+    shortcuts = get_existing_shortcuts(steam_path, user_id)
+    before = len(shortcuts)
+    shortcuts = [sc for sc in shortcuts if sc.appid not in remove_ids]
+    after = len(shortcuts)
+
+    removed = before - after
+    kept = after
+
+    if dry_run:
+        logger.info(f"[DRY RUN] Would remove {removed} duplicate shortcuts, keeping {kept}")
+        return removed, kept
+
+    # Write updated shortcuts
+    vdf_path = find_shortcuts_vdf(steam_path, user_id)
+    write_shortcuts_vdf(vdf_path, shortcuts)
+    logger.info(f"Removed {removed} duplicate shortcuts, keeping {kept}")
+
+    return removed, kept
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Full Reconciliation
 # ═══════════════════════════════════════════════════════════════════════
 
