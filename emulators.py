@@ -429,6 +429,7 @@ class EmulatorRegistry:
         self._emulators: Dict[str, EmulatorPlugin] = {}
         self._retroarch_cores: Dict[str, RetroArchCorePlugin] = {}
         self._systems: Dict[str, SystemPlugin] = {}
+        self._system_aliases: Dict[str, str] = {}
         self._load_config()
 
     def _load_config(self) -> None:
@@ -489,7 +490,7 @@ class EmulatorRegistry:
             self._emulators[f"retroarch/{core_name}"] = plugin
 
     def _load_systems(self) -> None:
-        """Load system definitions."""
+        """Load system definitions and register aliases."""
         systems = self._config.get("systems", {})
         for system_id, config in systems.items():
             default_emulator_id = config.get("default_emulator", "")
@@ -500,6 +501,11 @@ class EmulatorRegistry:
 
             plugin = SystemPlugin(system_id, config, emulator_plugin)
             self._systems[system_id] = plugin
+
+            # Register aliases so folder names like "zmachine" resolve
+            # to the canonical system (e.g. "infocom").
+            for alias in config.get("aliases", []):
+                self._system_aliases[alias] = system_id
 
     def get(self, emulator_id: str) -> Optional[EmulatorPlugin]:
         """Get an emulator plugin by ID.
@@ -513,15 +519,23 @@ class EmulatorRegistry:
         return self._emulators.get(emulator_id)
 
     def get_system(self, system_id: str) -> Optional[SystemPlugin]:
-        """Get a system configuration by ID.
+        """Get a system configuration by ID or alias.
 
         Args:
-            system_id: The system identifier (e.g., 'n64', 'psx').
+            system_id: The system identifier or alias (e.g., 'n64', 'psx', 'zmachine').
 
         Returns:
             The SystemPlugin if found, else None.
         """
-        return self._systems.get(system_id)
+        # Direct lookup first
+        system = self._systems.get(system_id)
+        if system:
+            return system
+        # Resolve alias to canonical system ID
+        canonical_id = self._system_aliases.get(system_id)
+        if canonical_id:
+            return self._systems.get(canonical_id)
+        return None
 
     def get_for_system(self, system_id: str, emulator_id: Optional[str] = None) -> Optional[EmulatorPlugin]:
         """Get the emulator plugin for a system.

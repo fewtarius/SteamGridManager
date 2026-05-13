@@ -1244,7 +1244,7 @@ def _cmd_rom_art_clear(args: argparse.Namespace) -> int:
             print(f"Error: Unknown system '{args.system}'")
             return 1
         roms = scan_rom_folder(args.system, rom_path / args.system, sys_def)
-        all_roms = {args.system: roms} if roms else {}
+        all_roms = {sys_def._id: roms} if roms else {}
     else:
         all_roms = scan_all_systems(rom_path)
 
@@ -1480,7 +1480,7 @@ def cmd_rom(args: argparse.Namespace) -> int:
                 roms = scan_rom_folder(args.system, rom_path, system_def)
             else:
                 roms = scan_rom_folder(args.system, rom_path / args.system, system_def)
-            all_roms = {args.system: roms} if roms else {}
+            all_roms = {system_def._id: roms} if roms else {}
         else:
             all_roms = scan_all_systems(rom_path)
 
@@ -1551,7 +1551,7 @@ def cmd_rom(args: argparse.Namespace) -> int:
                 roms = scan_rom_folder(args.system, rom_path, system_def)
             else:
                 roms = scan_rom_folder(args.system, rom_path / args.system, system_def)
-            all_roms = {args.system: roms} if roms else {}
+            all_roms = {system_def._id: roms} if roms else {}
         else:
             all_roms = scan_all_systems(rom_path)
 

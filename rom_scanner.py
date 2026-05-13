@@ -397,9 +397,11 @@ def scan_all_systems(rom_root: Path) -> Dict[str, List[RomEntry]]:
             continue
             continue
 
+        # Use the canonical system ID (aliases like "zmachine" resolve to "infocom")
+        canonical_id = system_def._id
         roms = scan_rom_folder(system_name, folder, system_def)
         if roms:
-            results[system_name] = roms
+            results.setdefault(canonical_id, []).extend(roms)
 
     # If no results and the root itself is a system folder (e.g. user pointed
     # at /Roms/c64/ directly instead of /Roms/), scan it as a single system.

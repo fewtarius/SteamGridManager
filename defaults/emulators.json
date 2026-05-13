@@ -546,18 +546,10 @@
       "extensions": [".dat", ".z1", ".z2", ".z3", ".z4", ".z5", ".z6", ".z7", ".z8", ".zip", ".7z"],
       "screenscraper_id": 0,
       "thegamesdb_id": "0",
-      "steam_category": "Infocom"
+      "steam_category": "Infocom",
+      "aliases": ["zmachine"],
+      "legacy_tags": ["ZMachine"]
     },
-    "zmachine": {
-      "fullname": "Z-Machine",
-      "manufacturer": "Infocom",
-      "hardware_type": "computer",
-      "release_year": 1980,
-      "default_emulator": "retroarch/81",
-      "extensions": [".dat", ".z1", ".z2", ".z3", ".z4", ".z5", ".z6", ".z7", ".z8", ".zip", ".7z"],
-      "screenscraper_id": 0,
-      "thegamesdb_id": "0",
-      "steam_category": "ZMachine"
     },
     "xbox": {
       "fullname": "Xbox",
