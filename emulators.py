@@ -223,6 +223,121 @@ class EmulatorPlugin:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Vita3K Plugin
+# ═══════════════════════════════════════════════════════════════════════
+
+class Vita3KPlugin(EmulatorPlugin):
+    """Vita3K emulator plugin with multi-path binary discovery.
+
+    Vita3K is commonly installed in several locations on SteamOS:
+    - ``~/.config/Vita3K/Vita3K`` (local build)
+    - ``/opt/vita3k/Vita3K`` (manual install)
+    - ``/usr/bin/Vita3K`` (system package)
+    - ``/usr/local/bin/Vita3K`` (manual system install)
+
+    This plugin searches all known locations and falls back to PATH.
+    Custom search paths can be specified in emulators.json via the
+    ``search_paths`` key.
+    """
+
+    # Default search paths for the Vita3K binary, in priority order.
+    DEFAULT_BINARY_SEARCH_PATHS = [
+        Path.home() / '.config' / 'Vita3K' / 'Vita3K',
+        Path('/opt/vita3k/Vita3K'),
+        Path('/usr/bin/Vita3K'),
+        Path('/usr/local/bin/Vita3K'),
+    ]
+
+    # Default search paths for the Vita3K data directory.
+    DEFAULT_DATA_SEARCH_PATHS = [
+        Path('/opt/vita3k/data'),
+        Path.home() / '.local' / 'share' / 'Vita3K' / 'Vita3K',
+        Path.home() / '.config' / 'Vita3K' / 'Vita3K',
+    ]
+
+    @property
+    def binary_search_paths(self) -> List[Path]:
+        """Search paths for the Vita3K binary, from config or defaults."""
+        paths = self._config.get("search_paths", [])
+        if paths:
+            return [Path(p).expanduser() for p in paths]
+        return self.DEFAULT_BINARY_SEARCH_PATHS
+
+    @property
+    def data_search_paths(self) -> List[Path]:
+        """Search paths for the Vita3K data directory."""
+        return self.DEFAULT_DATA_SEARCH_PATHS
+
+    def find_executable(self) -> str:
+        """Find the Vita3K binary by searching known locations.
+
+        Returns:
+            Path to Vita3K executable as a string.
+        Raises:
+            FileNotFoundError: If Vita3K is not found anywhere.
+        """
+        # Check configured executable first (if it's an absolute path)
+        exe = self.executable
+        if exe:
+            exe_path = Path(exe).expanduser()
+            if exe_path.is_absolute() and exe_path.exists():
+                return str(exe_path)
+
+        # Search known locations (from config or defaults)
+        for candidate in self.binary_search_paths:
+            if candidate.exists() and candidate.is_file():
+                return str(candidate)
+
+        # PATH fallback
+        result = shutil.which('Vita3K')
+        if result:
+            return result
+
+        raise FileNotFoundError(
+            "Vita3K not found. Searched: "
+            + ", ".join(str(p) for p in self.binary_search_paths)
+            + ", and PATH"
+        )
+
+    @property
+    def data_dir(self) -> Optional[Path]:
+        """Find the Vita3K data directory containing installed games.
+
+        Checks config.yml pref-path first, then known locations.
+        """
+        # Check config.yml for pref-path
+        config_path = Path.home() / '.config' / 'Vita3K' / 'config.yml'
+        if config_path.exists():
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        key, _, value = line.partition(':')
+                        if key.strip() == 'pref-path':
+                            pref = value.strip()
+                            if pref:
+                                pref_path = Path(pref).expanduser()
+                                if pref_path.exists():
+                                    return pref_path
+            except Exception:
+                pass
+
+        # Check known data directory locations
+        for candidate in self.data_search_paths:
+            if candidate.exists() and (candidate / 'ux0').is_dir():
+                return candidate
+
+        return None
+
+    def validate(self) -> Tuple[bool, str]:
+        """Check if Vita3K is installed and usable."""
+        try:
+            exe = self.find_executable()
+            return True, f"Installed at {exe}"
+        except FileNotFoundError:
+            return False, "Vita3K not found in known locations or PATH"
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # RetroArch Core Plugin
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -470,6 +585,11 @@ class EmulatorRegistry:
         except Exception as e:
             logger.error(f"Failed to load {config_path}: {e}")
 
+    # Emulator IDs that use specialized plugin classes.
+    SPECIALIZED_PLUGINS = {
+        "vita3k": Vita3KPlugin,
+    }
+
     def _load_emulators(self) -> None:
         """Load base emulator definitions."""
         emulators = self._config.get("emulators", {})
@@ -477,7 +597,8 @@ class EmulatorRegistry:
             if config.get("type") == "retroarch":
                 # RetroArch cores are loaded separately
                 continue
-            plugin = EmulatorPlugin(emulator_id, config)
+            plugin_class = self.SPECIALIZED_PLUGINS.get(emulator_id, EmulatorPlugin)
+            plugin = plugin_class(emulator_id, config)
             self._emulators[emulator_id] = plugin
 
     def _load_retroarch_cores(self) -> None:

@@ -392,62 +392,37 @@ _VITA3K_BINARY: Optional[str] = None
 def _find_vita3k_binary() -> str:
     """Find the Vita3K executable path.
 
-    Search order:
-    1. ``~/.config/Vita3K/Vita3K``
-    2. ``/usr/bin/Vita3K``
-    3. ``/usr/local/bin/Vita3K``
-    4. ``Vita3K`` (PATH fallback)
+    Delegates to Vita3KPlugin.find_executable() which searches
+    multiple known locations and falls back to PATH.
     """
     global _VITA3K_BINARY
     if _VITA3K_BINARY is not None:
         return _VITA3K_BINARY
 
-    candidates = [
-        Path.home() / '.config' / 'Vita3K' / 'Vita3K',
-        Path('/usr/bin/Vita3K'),
-        Path('/usr/local/bin/Vita3K'),
-    ]
-    for candidate in candidates:
-        if candidate.exists() and candidate.is_file():
-            _VITA3K_BINARY = str(candidate)
+    from emulators import get_emulator
+    plugin = get_emulator("vita3k")
+    if plugin and hasattr(plugin, 'find_executable'):
+        try:
+            _VITA3K_BINARY = plugin.find_executable()
             return _VITA3K_BINARY
+        except FileNotFoundError:
+            pass
 
     _VITA3K_BINARY = 'Vita3K'
     return _VITA3K_BINARY
 
 
 def find_vita3k_data_dir() -> Optional[Path]:
-    """Find the Vita3K data directory containing installed games."""
+    """Find the Vita3K data directory containing installed games.
+
+    Delegates to Vita3KPlugin.data_dir which checks config.yml
+    pref-path and known data directory locations.
+    """
     from emulators import get_emulator
-
-    # Use the emulator plugin's data_dir property
-    vita3k = get_emulator("vita3k")
-    if vita3k and hasattr(vita3k, 'data_dir'):
-        return vita3k.data_dir
-
-    # Fallback: check common locations
-    candidates = [
-        Path.home() / '.local' / 'share' / 'Vita3K',
-        Path.home() / '.config' / 'Vita3K' / 'Vita3K',
-    ]
-
-    config_path = Path.home() / '.config' / 'Vita3K' / 'config.yml'
-    if config_path.exists():
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    key, _, value = line.partition(':')
-                    if key.strip() == 'pref-path':
-                        pref = value.strip()
-                        if pref:
-                            pref_path = Path(pref).expanduser()
-                            if pref_path.exists():
-                                return pref_path
-        except Exception:
-            pass
-
-    for candidate in candidates:
-        if candidate.exists() and (candidate / 'ux0').is_dir():
-            return candidate
+    plugin = get_emulator("vita3k")
+    if plugin and hasattr(plugin, 'data_dir'):
+        result = plugin.data_dir
+        if result:
+            return result
 
     return None

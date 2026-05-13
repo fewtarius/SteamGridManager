@@ -69,6 +69,12 @@
       "display_name": "Vita3K",
       "type": "native",
       "executable": "Vita3K",
+      "search_paths": [
+        "~/.config/Vita3K/Vita3K",
+        "/opt/vita3k/Vita3K",
+        "/usr/bin/Vita3K",
+        "/usr/local/bin/Vita3K"
+      ],
       "launch_args": "-F -r \"{title_id}\"",
       "launch_mode": "title_id",
       "description": "PlayStation Vita emulator (uses title IDs)"
