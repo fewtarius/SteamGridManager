@@ -205,7 +205,8 @@
       "extensions": [".nes", ".unif", ".unf", ".zip", ".7z"],
       "screenscraper_id": 3,
       "thegamesdb_id": "7",
-      "steam_category": "NES"
+      "steam_category": "NES",
+      "legacy_tags": ["Nintendo Entertainment System"]
     },
     "snes": {
       "fullname": "Super Nintendo",
@@ -216,7 +217,8 @@
       "extensions": [".smc", ".fig", ".sfc", ".swc", ".zip", ".7z"],
       "screenscraper_id": 4,
       "thegamesdb_id": "6",
-      "steam_category": "SNES"
+      "steam_category": "SNES",
+      "legacy_tags": ["Super Nintendo"]
     },
     "n64": {
       "fullname": "Nintendo 64",
@@ -227,7 +229,8 @@
       "extensions": [".z64", ".n64", ".v64", ".zip", ".7z"],
       "screenscraper_id": 14,
       "thegamesdb_id": "3",
-      "steam_category": "N64"
+      "steam_category": "N64",
+      "legacy_tags": ["Nintendo 64"]
     },
     "gb": {
       "fullname": "Game Boy",
@@ -238,7 +241,8 @@
       "extensions": [".gb", ".zip", ".7z"],
       "screenscraper_id": 9,
       "thegamesdb_id": "4",
-      "steam_category": "GB"
+      "steam_category": "GB",
+      "legacy_tags": ["Game Boy"]
     },
     "gbc": {
       "fullname": "Game Boy Color",
@@ -249,7 +253,8 @@
       "extensions": [".gbc", ".zip", ".7z"],
       "screenscraper_id": 10,
       "thegamesdb_id": "41",
-      "steam_category": "GBC"
+      "steam_category": "GBC",
+      "legacy_tags": ["Game Boy Color"]
     },
     "gba": {
       "fullname": "Game Boy Advance",
@@ -260,7 +265,8 @@
       "extensions": [".gba", ".zip", ".7z"],
       "screenscraper_id": 12,
       "thegamesdb_id": "5",
-      "steam_category": "GBA"
+      "steam_category": "GBA",
+      "legacy_tags": ["Game Boy Advance"]
     },
     "nds": {
       "fullname": "Nintendo DS",
@@ -271,7 +277,8 @@
       "extensions": [".nds", ".zip", ".7z"],
       "screenscraper_id": 15,
       "thegamesdb_id": "8",
-      "steam_category": "DS"
+      "steam_category": "DS",
+      "legacy_tags": ["Nintendo DS"]
     },
     "gamecube": {
       "fullname": "GameCube",
@@ -282,7 +289,8 @@
       "extensions": [".gcm", ".iso", ".gcz", ".ciso", ".wbfs", ".rvz", ".dol"],
       "screenscraper_id": 13,
       "thegamesdb_id": "2",
-      "steam_category": "Gamecube"
+      "steam_category": "Gamecube",
+      "legacy_tags": ["GameCube"]
     },
     "wii": {
       "fullname": "Wii",
@@ -304,7 +312,8 @@
       "extensions": [".wud", ".wux", ".wua", ".rpx"],
       "screenscraper_id": 18,
       "thegamesdb_id": "38",
-      "steam_category": "WiiU"
+      "steam_category": "WiiU",
+      "legacy_tags": ["Wii U"]
     },
     "genesis": {
       "fullname": "Genesis",
@@ -326,7 +335,8 @@
       "extensions": [".bin", ".sms", ".zip", ".7z"],
       "screenscraper_id": 2,
       "thegamesdb_id": "35",
-      "steam_category": "SMS"
+      "steam_category": "SMS",
+      "legacy_tags": ["Master System", "Sega Master System"]
     },
     "gamegear": {
       "fullname": "Game Gear",
@@ -337,7 +347,8 @@
       "extensions": [".bin", ".gg", ".zip", ".7z"],
       "screenscraper_id": 21,
       "thegamesdb_id": "20",
-      "steam_category": "GameGear"
+      "steam_category": "GameGear",
+      "legacy_tags": ["Game Gear"]
     },
     "dreamcast": {
       "fullname": "Dreamcast",
@@ -370,7 +381,8 @@
       "extensions": [".bin", ".cue", ".iso", ".img", ".pbp", ".zip", ".7z"],
       "screenscraper_id": 7,
       "thegamesdb_id": "10",
-      "steam_category": "PSX"
+      "steam_category": "PSX",
+      "legacy_tags": ["PlayStation"]
     },
     "ps2": {
       "fullname": "PlayStation 2",
@@ -381,7 +393,8 @@
       "extensions": [".iso", ".bin", ".cue", ".m3u", ".zip", ".7z"],
       "screenscraper_id": 17,
       "thegamesdb_id": "1",
-      "steam_category": "PS2"
+      "steam_category": "PS2",
+      "legacy_tags": ["PlayStation 2"]
     },
     "psp": {
       "fullname": "PlayStation Portable",
@@ -392,7 +405,8 @@
       "extensions": [".iso", ".pbp", ".cso", ".zip", ".7z"],
       "screenscraper_id": 19,
       "thegamesdb_id": "13",
-      "steam_category": "PSP"
+      "steam_category": "PSP",
+      "legacy_tags": ["PlayStation Portable"]
     },
     "psvita": {
       "fullname": "PlayStation Vita",
@@ -403,7 +417,8 @@
       "scan_as_dirs": true,
       "screenscraper_id": 0,
       "thegamesdb_id": "19",
-      "steam_category": "Vita"
+      "steam_category": "Vita",
+      "legacy_tags": ["PlayStation Vita", "PS Vita"]
     },
     "atari2600": {
       "fullname": "Atari 2600",
@@ -414,7 +429,8 @@
       "extensions": [".a26", ".bin", ".zip", ".7z"],
       "screenscraper_id": 5,
       "thegamesdb_id": "22",
-      "steam_category": "Atari2600"
+      "steam_category": "Atari2600",
+      "legacy_tags": ["Atari 2600"]
     },
     "atari5200": {
       "fullname": "Atari 5200",
@@ -425,7 +441,8 @@
       "extensions": [".a52", ".bin", ".zip", ".7z"],
       "screenscraper_id": 6,
       "thegamesdb_id": "23",
-      "steam_category": "Atari5200"
+      "steam_category": "Atari5200",
+      "legacy_tags": ["Atari 5200"]
     },
     "atari7800": {
       "fullname": "Atari 7800",
@@ -436,7 +453,8 @@
       "extensions": [".a78", ".bin", ".zip", ".7z"],
       "screenscraper_id": 22,
       "thegamesdb_id": "37",
-      "steam_category": "Atari7800"
+      "steam_category": "Atari7800",
+      "legacy_tags": ["Atari 7800"]
     },
     "atarilynx": {
       "fullname": "Atari Lynx",
@@ -447,7 +465,8 @@
       "extensions": [".lnx", ".zip", ".7z"],
       "screenscraper_id": 11,
       "thegamesdb_id": "21",
-      "steam_category": "Lynx"
+      "steam_category": "Lynx",
+      "legacy_tags": ["Atari Lynx"]
     },
     "c64": {
       "fullname": "Commodore 64",
@@ -458,7 +477,8 @@
       "extensions": [".d64", ".t64", ".x64", ".prg", ".p00", ".crt", ".zip", ".7z"],
       "screenscraper_id": 25,
       "thegamesdb_id": "0",
-      "steam_category": "C64"
+      "steam_category": "C64",
+      "legacy_tags": ["Commodore 64"]
     },
     "vic20": {
       "fullname": "VIC-20",
@@ -469,7 +489,8 @@
       "extensions": [".d64", ".t64", ".prg", ".p00", ".crt", ".zip", ".7z"],
       "screenscraper_id": 26,
       "thegamesdb_id": "0",
-      "steam_category": "VIC20"
+      "steam_category": "VIC20",
+      "legacy_tags": ["VIC-20"]
     },
     "amiga": {
       "fullname": "Amiga",
@@ -513,7 +534,8 @@
       "extensions": [".neo", ".zip", ".7z"],
       "screenscraper_id": 30,
       "thegamesdb_id": "0",
-      "steam_category": "NeoGeo"
+      "steam_category": "NeoGeo",
+      "legacy_tags": ["Neo Geo"]
     },
     "arcade": {
       "fullname": "Arcade",
@@ -535,7 +557,8 @@
       "extensions": [".dos", ".pc", ".zip", ".7z"],
       "screenscraper_id": 16,
       "thegamesdb_id": "0",
-      "steam_category": "PC"
+      "steam_category": "PC",
+      "legacy_tags": ["DOS"]
     },
     "infocom": {
       "fullname": "Infocom / Z-Machine",
@@ -549,7 +572,6 @@
       "steam_category": "Infocom",
       "aliases": ["zmachine"],
       "legacy_tags": ["ZMachine"]
-    },
     },
     "xbox": {
       "fullname": "Xbox",

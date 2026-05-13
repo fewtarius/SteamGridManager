@@ -1867,6 +1867,8 @@ def cmd_collections(args: argparse.Namespace) -> int:
         return cmd_collections_edit(args)
     elif collections_action == 'remove':
         return cmd_collections_remove(args)
+    elif collections_action == 'sync':
+        return cmd_collections_sync(args)
     else:
         # Default: rebuild collections from shortcuts.vdf (original behavior)
         return cmd_collections_rebuild(args)
@@ -2083,6 +2085,129 @@ def cmd_collections_remove(args: argparse.Namespace) -> int:
         print("\n  Error: failed to delete collection.")
         return 1
 
+    return 0
+
+
+def cmd_collections_sync(args: argparse.Namespace) -> int:
+    """Merge duplicate collections and clean up legacy naming.
+
+    Scans existing Steam collections for names that match legacy tags
+    (e.g. "Commodore 64" instead of "C64") and merges them into the
+    canonical SGM collection. The legacy collection is then deleted.
+
+    Also merges collections that share the same name but have different
+    collection IDs (e.g. SRM-created "Heroic" vs SGM-created "Heroic").
+
+    This is useful for cleaning up after switching from SRM to SGM,
+    or when collection naming conventions have changed.
+    """
+    from config import config_exists, get_resolved_config
+    from shortcuts import read_cloud_collections, update_steam_collections
+    from steam import find_steam_path
+
+    try:
+        sp = find_steam_path()
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return 1
+
+    cfg = get_resolved_config() if config_exists() else {}
+    user_id = cfg.get('steam_user_id', 'auto')
+    uid = user_id if user_id != 'auto' else None
+
+    # Build legacy -> canonical mapping from system definitions
+    legacy_to_canonical: dict[str, str] = {}
+    canonical_to_legacy: dict[str, list[str]] = {}
+    try:
+        from emulators import get_registry
+        registry = get_registry()
+        for sys_id, sys_def in registry.list_systems().items():
+            canonical = sys_def.get_steam_category()
+            for tag in sys_def.all_category_tags():
+                if tag != canonical:
+                    legacy_to_canonical[tag] = canonical
+                    canonical_to_legacy.setdefault(canonical, []).append(tag)
+    except Exception as e:
+        print(f"Error loading system definitions: {e}")
+        return 1
+
+    # Read current collections
+    collections = read_cloud_collections(sp, uid)
+    active = [c for c in collections if not c.is_deleted]
+
+    # Find duplicates: collections whose name matches a legacy tag
+    merges: list[tuple] = []  # (legacy_name, canonical_name, legacy_count, canonical_count)
+    for c in active:
+        canonical = legacy_to_canonical.get(c.name)
+        if canonical:
+            # Find the canonical collection
+            canonical_coll = next(
+                (x for x in active if x.name == canonical), None)
+            canonical_count = len(canonical_coll.added) if canonical_coll else 0
+            merges.append((c.name, canonical, len(c.added), canonical_count))
+
+    # Find same-name duplicates (different uc- IDs, same name)
+    name_to_colls: dict[str, list] = {}
+    for c in active:
+        name_to_colls.setdefault(c.name, []).append(c)
+
+    for name, colls in name_to_colls.items():
+        if len(colls) > 1:
+            # Check if this name is already being merged as a legacy name
+            already_legacy = any(m[0] == name for m in merges)
+            if not already_legacy:
+                # Multiple collections with the same canonical name - merge them
+                total_games = sum(len(c.added) for c in colls)
+                merges.append((name, name, total_games - len(colls[0].added), len(colls[0].added)))
+
+    if not merges:
+        print("\n  No duplicate collections found. Everything looks clean!")
+        return 0
+
+    print("\n  Duplicate Collections Found\n")
+    print("  The following collections will be merged:\n")
+    total_merged_games = 0
+    for legacy_name, canonical, legacy_count, canonical_count in merges:
+        merged_count = legacy_count + canonical_count
+        total_merged_games += legacy_count
+        if legacy_name == canonical:
+            # Same-name duplicate
+            print(f"    {legacy_name} ({legacy_count + canonical_count} games across {2} collections) -> merge into single collection")
+        else:
+            print(f"    {legacy_name} ({legacy_count} games) -> {canonical} ({canonical_count} games) = {merged_count} total")
+    print(f"\n  Total: {len(merges)} collections merged, {total_merged_games} games consolidated")
+
+    if args.dry_run:
+        print(f"\n  (dry run — nothing written)")
+        return 0
+
+    # Build the merged category data and call update_steam_collections
+    # which will handle the actual merging and deletion
+    BUILTIN_COLLECTIONS = {"favorite", "favorites", "hidden"}
+    by_category: dict[str, list[int]] = {}
+    for c in active:
+        if c.is_deleted:
+            continue
+        # Skip built-in Steam collections (Favorites, Hidden)
+        if c.coll_id in BUILTIN_COLLECTIONS or c.name.lower() in BUILTIN_COLLECTIONS:
+            continue
+        # Determine canonical name
+        name = legacy_to_canonical.get(c.name, c.name)
+        by_category.setdefault(name, []).extend(c.added)
+
+    # Deduplicate app IDs within each category
+    for cat in by_category:
+        by_category[cat] = list(set(by_category[cat]))
+
+    ok = update_steam_collections(sp, by_category, uid)
+    if ok:
+        total = sum(len(v) for v in by_category.values())
+        print(f"\n  [OK] Merged {len(merges)} duplicate collections.")
+        print(f"  {len(by_category)} collections, {total} total memberships.")
+        print(f"  Restart Steam to see updated collections.")
+    else:
+        print("\n  Error: failed to update collections.")
+        return 1
     return 0
 
 
@@ -3190,6 +3315,7 @@ def main() -> int:
             '  sgm collections list              # list all collections\n'
             '  sgm collections edit <name>       # add/remove games\n'
             '  sgm collections remove <name>     # delete a collection\n'
+            '  sgm collections sync              # merge duplicate collections\n'
             '  sgm collections rebuild            # rebuild from shortcuts\n\n'
             'Or use rebuild mode with filtering:\n'
             '  sgm collections rebuild --type rom   # only ROM system collections\n'
@@ -3244,6 +3370,23 @@ def main() -> int:
         '--dry-run', action='store_true',
         help='Show what would be written without making changes')
     collections_rebuild.set_defaults(func=cmd_collections)
+
+    collections_sync = collections_sub.add_parser(
+        'sync', help='Merge duplicate collections and clean up legacy names',
+        description=(
+            'Scans Steam collections for duplicates caused by different naming\n'
+            'conventions (e.g. "Commodore 64" vs "C64") and merges them into\n'
+            'the canonical SGM collection name. Also removes orphaned collections.\n\n'
+            'Examples:\n'
+            '  sgm collections sync           # merge duplicates\n'
+            '  sgm collections sync --dry-run # preview changes'
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    collections_sync.add_argument(
+        '--dry-run', action='store_true',
+        help='Show what would be merged without making changes')
+    collections_sync.set_defaults(func=cmd_collections)
 
     # Default: collections with no action shows help
     sub_collections.set_defaults(func=cmd_collections)

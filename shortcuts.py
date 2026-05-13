@@ -543,11 +543,15 @@ def update_steam_collections(steam_path: Path,
     Creates native ``uc-*`` user collections (same format Steam uses natively),
     replacing any old ``srm-*`` collections from Steam ROM Manager.
 
+    Also merges legacy-named collections (e.g. "Commodore 64" -> "C64") into
+    the canonical collection and marks the legacy ones as deleted.
+
     ``cloud-storage-namespace-1.json`` is the authoritative collection source.
     On import we:
       1. Remove (mark deleted) all old ``srm-*`` entries.
-      2. Write new ``uc-*`` entries with the full game list.
-      3. Update ``localconfig.vdf`` user-collections cache for parity.
+      2. Merge legacy-named collections into their canonical equivalents.
+      3. Write new ``uc-*`` entries with the full game list.
+      4. Update ``localconfig.vdf`` user-collections cache for parity.
 
     Args:
         steam_path: Steam installation path.
@@ -604,6 +608,16 @@ def update_steam_collections(steam_path: Path,
                     pass
         return v
 
+    def _parse_collection_value(entry: dict) -> dict:
+        """Parse the 'value' JSON string from a cloud collection entry."""
+        value_str = entry.get("value", "")
+        if value_str:
+            try:
+                return json.loads(value_str)
+            except json.JSONDecodeError:
+                pass
+        return {}
+
     # Build lookup: key -> list index
     cloud_index: dict[str, int] = {}
     for i, item in enumerate(cloud_data):
@@ -626,10 +640,141 @@ def update_steam_collections(steam_path: Path,
             next_version += 1
             logger.debug(f"Marked old SRM collection as deleted: {key}")
 
-    # 2. Write new uc-* entries
+    # 2. Merge legacy-named collections into canonical ones
+    # Build a mapping: legacy_name -> canonical_category
+    # e.g. "Commodore 64" -> "C64", "Nintendo Entertainment System" -> "NES"
+    legacy_to_canonical: dict[str, str] = {}
+    try:
+        from emulators import get_registry
+        registry = get_registry()
+        for sys_id, sys_def in registry.list_systems().items():
+            canonical = sys_def.get_steam_category()
+            legacy_to_canonical[canonical] = canonical  # self-map for safety
+            for tag in sys_def.all_category_tags():
+                if tag != canonical:
+                    legacy_to_canonical[tag] = canonical
+    except Exception as e:
+        logger.debug(f"Could not load system definitions for legacy mapping: {e}")
+
+    # Find existing collections whose names are legacy aliases
+    legacy_coll_ids: dict[str, str] = {}  # coll_id -> canonical category name
+    for key, idx in list(cloud_index.items()):
+        if not key.startswith("user-collections.uc-"):
+            continue
+        entry = cloud_data[idx][1] if isinstance(cloud_data[idx], list) else cloud_data[idx]
+        if entry.get("is_deleted", False):
+            continue
+        value = _parse_collection_value(entry)
+        coll_name = value.get("name", "")
+        if not coll_name:
+            continue
+        canonical = legacy_to_canonical.get(coll_name)
+        if canonical and canonical != coll_name:
+            legacy_coll_ids[key] = canonical
+            # Merge the legacy collection's games into shortcuts_by_category
+            legacy_added = [int(x) for x in value.get("added", [])
+                           if isinstance(x, int) or (isinstance(x, str) and x.isdigit())]
+            existing = shortcuts_by_category.setdefault(canonical, [])
+            # Add games that aren't already in the canonical list
+            existing_set = set(existing)
+            for app_id in legacy_added:
+                if app_id not in existing_set:
+                    existing.append(app_id)
+                    existing_set.add(app_id)
+            logger.info(f"Merged legacy collection {coll_name!r} into {canonical!r} ({len(legacy_added)} games)")
+
+    # Mark legacy collections as deleted
+    for key, canonical in legacy_coll_ids.items():
+        idx = cloud_index[key]
+        coll_id = key.replace("user-collections.", "")
+        deleted_entry = {
+            "key": key,
+            "timestamp": timestamp_ms,
+            "is_deleted": True,
+            "version": str(next_version),
+        }
+        cloud_data[idx] = [key, deleted_entry]
+        next_version += 1
+        logger.info(f"Marked legacy collection as deleted: {key} (merged into {canonical!r})")
+
+    # 2b. Merge same-name duplicates (e.g. SRM-created "Heroic" vs SGM-created "Heroic")
+    # When multiple uc-* collections share the same name, keep only the SGM one
+    # and merge the others' games into it.
+    # Also delete any uc-* collection that duplicates a built-in Steam collection
+    # (e.g. "Favorites" or "Hidden").
+    BUILTIN_COLLECTIONS = {"favorite", "favorites", "hidden"}
+
+    name_to_keys: dict[str, list[str]] = {}  # collection name -> list of cloud keys
+    for key, idx in list(cloud_index.items()):
+        if not key.startswith("user-collections.uc-"):
+            continue
+        entry = cloud_data[idx][1] if isinstance(cloud_data[idx], list) else cloud_data[idx]
+        if entry.get("is_deleted", False):
+            continue
+        value = _parse_collection_value(entry)
+        coll_name = value.get("name", "")
+        if coll_name:
+            name_to_keys.setdefault(coll_name, []).append(key)
+
+    for coll_name, keys in name_to_keys.items():
+        # Delete uc-* collections that duplicate built-in Steam collections
+        if coll_name.lower() in BUILTIN_COLLECTIONS:
+            for key in keys:
+                idx = cloud_index[key]
+                deleted_entry = {
+                    "key": key,
+                    "timestamp": timestamp_ms,
+                    "is_deleted": True,
+                    "version": str(next_version),
+                }
+                cloud_data[idx] = [key, deleted_entry]
+                next_version += 1
+                logger.info(f"Marked built-in duplicate collection as deleted: {key} ({coll_name!r})")
+            continue
+
+        if len(keys) <= 1:
+            continue
+        # Determine which key is the SGM canonical one
+        sgm_key = f"user-collections.{_make_uc_id(coll_name)}"
+        # Merge all non-SGM collections into the SGM one
+        for key in keys:
+            if key == sgm_key:
+                continue
+            idx = cloud_index[key]
+            entry = cloud_data[idx][1] if isinstance(cloud_data[idx], list) else cloud_data[idx]
+            value = _parse_collection_value(entry)
+            dup_added = [int(x) for x in value.get("added", [])
+                        if isinstance(x, int) or (isinstance(x, str) and x.isdigit())]
+            # Merge games into the canonical category
+            existing = shortcuts_by_category.setdefault(coll_name, [])
+            existing_set = set(existing)
+            for app_id in dup_added:
+                if app_id not in existing_set:
+                    existing.append(app_id)
+                    existing_set.add(app_id)
+            # Mark the duplicate as deleted
+            deleted_entry = {
+                "key": key,
+                "timestamp": timestamp_ms,
+                "is_deleted": True,
+                "version": str(next_version),
+            }
+            cloud_data[idx] = [key, deleted_entry]
+            next_version += 1
+            logger.info(f"Marked duplicate collection as deleted: {key} (merged into {coll_name!r})")
+
+    # 3. Write new uc-* entries
+    # Skip built-in Steam collection names that should not be duplicated
+    BUILTIN_COLLECTIONS = {"favorite", "favorites", "hidden"}
+
     new_collections: dict[str, dict] = {}  # coll_id -> value dict (for localconfig)
     for category, app_ids in shortcuts_by_category.items():
         if not app_ids:
+            continue
+
+        # Skip built-in Steam collections (Favorites, Hidden)
+        if category.lower() in BUILTIN_COLLECTIONS:
+            logger.debug(f"Skipping built-in collection: {category!r}")
             continue
 
         coll_id = _make_uc_id(category)
@@ -666,7 +811,7 @@ def update_steam_collections(steam_path: Path,
         next_version += 1
         logger.info(f"Wrote collection {category!r} ({coll_id}) with {len(app_ids)} games")
 
-    # 3. Persist cloud storage
+    # 4. Persist cloud storage
     try:
         import os as _os
         tmp_cloud = cloud_path.with_suffix(".json.sgm_tmp")
@@ -679,7 +824,7 @@ def update_steam_collections(steam_path: Path,
         logger.warning(f"Failed to write cloud storage collections: {e}")
         return False
 
-    # 4. Update localconfig.vdf user-collections cache (best-effort)
+    # 5. Update localconfig.vdf user-collections cache (best-effort)
     try:
         content = vdf_path.read_text(encoding="utf-8")
     except OSError as e:
@@ -701,12 +846,15 @@ def update_steam_collections(steam_path: Path,
     else:
         collections = {}
 
-    # Remove old srm-* keys and any existing uc-* entries that have "name" (clean them up).
-    # Also strip "name" from any existing uc-* entries so Steam can display them.
+    # Remove old srm-* keys, legacy collection keys, and strip "name" from entries.
+    # Also remove any legacy collection IDs that were merged.
+    legacy_coll_id_set = {key.replace("user-collections.", "") for key in legacy_coll_ids}
     cleaned: dict = {}
     for k, v in collections.items():
         if k.startswith("srm-"):
             continue  # drop old SRM keys
+        if k in legacy_coll_id_set:
+            continue  # drop merged legacy collection keys
         if isinstance(v, dict) and "name" in v:
             v = {kk: vv for kk, vv in v.items() if kk != "name"}
         cleaned[k] = v
