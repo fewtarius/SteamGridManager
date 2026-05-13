@@ -3,8 +3,14 @@
 
 Detects and cleans up orphaned entries:
 - Shortcuts whose ROM/exe no longer exists on disk
-- Grid art files whose app ID has no matching shortcut
+- Grid art files belonging to removed shortcuts (orphaned)
+- Grid art files with no matching shortcut (unlinked, informational)
 - Empty Steam collections
+
+Orphaned art belongs to shortcuts being removed and is safe to delete.
+Unlinked art has no matching shortcut but may belong to re-imported games
+with different app IDs (e.g., SRM vs SGM generate different IDs), so it
+is not auto-removed.
 
 This is the "housekeeping" module that keeps the Steam library
 in sync with what's actually installed.

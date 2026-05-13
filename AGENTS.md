@@ -228,14 +228,7 @@ if not grid_path.exists():
 
 **Symlinks:** ROM/non-Steam game images may be symlinks pointing to other files in the same directory. These represent aliased app IDs (e.g., different shortcut IDs for the same game).
 
-**CRITICAL DISCOVERY:** ALL many unique app IDs in the grid folder are **non-Steam shortcut IDs** (large numbers >10M). Zero official Steam app IDs exist in the grid folder. Official Steam games get their art from `appcache/librarycache/` which is NOT wiped by updates. The grid folder exclusively contains ROM/Heroic/non-Steam game custom art.
-
-**Current statistics (as of 2026-03-16):**
-- many total files, large
-- many real files + symlinks
-- many unique app IDs (all non-Steam shortcut IDs)
-- non-Steam shortcuts registered in shortcuts.vdf
-- Breakdown: tall, 854 wide, 768 hero, logo, icon
+**Important:** Grid folder app IDs are non-Steam shortcut IDs (large numbers >10M). Official Steam games get their art from `appcache/librarycache/` which is NOT wiped by updates. The grid folder exclusively contains ROM/Heroic/non-Steam game custom art.
 
 ---
 
@@ -623,7 +616,7 @@ def find_grid_path(steam_path: Path) -> Path:
 ```python
 {
     "timestamp": "2026-03-16T14:18:00",
-    "source_path": "/home/deck/.steam/steam/userdata/12345/config/grid",
+    "source_path": "/home/user/.steam/steam/userdata/12345/config/grid",
     "file_count": 4612,
     "real_files": 3890,
     "symlinks": 722,

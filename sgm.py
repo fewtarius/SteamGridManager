@@ -2749,7 +2749,8 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     """Reconcile Steam shortcuts and grid art with reality.
 
     Detects orphaned shortcuts (games no longer on disk), orphaned art
-    files (images with no matching shortcut), and empty collections.
+    files (belonging to removed shortcuts), unlinked art (no matching
+    shortcut, may be valid), and empty collections.
     Can clean them up with --clean or specific --clean-* flags.
     """
     from config import config_exists, get_resolved_config
