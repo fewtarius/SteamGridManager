@@ -1613,7 +1613,11 @@ def cmd_rom(args: argparse.Namespace) -> int:
 
                 # For Vita3K, start_dir is the Vita3K binary directory
                 if rom.title_id and sys_def.emulator.launch_mode == "title_id":
-                    start_dir = f'"{Path(sys_def.emulator.emulator).parent}"'
+                    try:
+                        exe_path = sys_def.emulator.find_executable()
+                        start_dir = f'"{Path(exe_path).parent}"'
+                    except FileNotFoundError:
+                        start_dir = f'"{Path(sys_def.emulator.executable).parent}"'
                 else:
                     raw_dir = str(rom.path.parent)
                     # Normalize SteamOS path symlinks
