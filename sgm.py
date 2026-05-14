@@ -2508,6 +2508,12 @@ def cmd_import_bundle(args: argparse.Namespace) -> int:
         print(f"Error: Bundle not found: {bundle_path}")
         return 1
 
+    manifest_path = bundle_path / "manifest.json"
+    if not manifest_path.exists():
+        print(f"Error: Not a valid SGM bundle: {bundle_path}")
+        print(f"  Missing manifest.json - did you mean 'sgm rom import' to import ROMs?")
+        return 1
+
     try:
         if config_exists():
             config = get_resolved_config()

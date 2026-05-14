@@ -77,6 +77,12 @@ for extra in requirements.txt sgm-monitor.service sgm-monitor.timer; do
     fi
 done
 
+ # Copy defaults directory (emulators.json etc.)
+ if [ -d "$SCRIPT_DIR/defaults" ]; then
+     mkdir -p "$INSTALL_DIR/defaults"
+     cp "$SCRIPT_DIR/defaults/"* "$INSTALL_DIR/defaults/"
+ fi
+
 # Install requests
 echo "  Checking dependencies..."
 if python3 -c "import requests" 2>/dev/null; then

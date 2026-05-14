@@ -28,7 +28,21 @@ logger = logging.getLogger(__name__)
 
 CONFIG_DIR = Path.home() / '.config' / 'sgm'
 EMULATORS_CONFIG = CONFIG_DIR / 'emulators.json'
-DEFAULT_CONFIG = Path(__file__).parent / 'defaults' / 'emulators.json'
+
+
+def _find_default_config() -> Path:
+    """Locate the default emulators.json, checking multiple locations."""
+    candidates = [
+        Path(__file__).parent / 'defaults' / 'emulators.json',  # installed copy
+        Path(__file__).parent.parent / 'defaults' / 'emulators.json',  # repo root
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]  # fallback to standard location
+
+
+DEFAULT_CONFIG = _find_default_config()
 
 # Flatpak IDs for known emulators
 FLATPAK_IDS = {
