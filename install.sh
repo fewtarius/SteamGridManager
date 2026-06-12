@@ -11,7 +11,26 @@ set -euo pipefail
 
 INSTALL_DIR="$HOME/.local/share/sgm"
 BIN_DIR="$HOME/.local/bin"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# When piped via `curl ... | bash`, BASH_SOURCE[0] is empty. In that case,
+# clone the repo to a temp dir so the rest of the install works.
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+else
+    if ! command -v git &>/dev/null; then
+        echo "  ERROR: git is required for remote install. Install git or clone the repo manually."
+        exit 1
+    fi
+    REPO_URL="${SGM_REPO_URL:-https://github.com/fewtarius/SteamGridManager.git}"
+    TMP_DIR="$(mktemp -d)"
+    trap 'rm -rf "$TMP_DIR"' EXIT
+    echo "  Downloading SteamGrid Manager..."
+    if ! git clone --depth 1 -q "$REPO_URL" "$TMP_DIR/sgm"; then
+        echo "  ERROR: Failed to clone $REPO_URL"
+        exit 1
+    fi
+    SCRIPT_DIR="$TMP_DIR/sgm"
+fi
 
 # All python files that make up sgm
 SGM_FILES=(
