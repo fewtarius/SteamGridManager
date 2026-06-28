@@ -198,6 +198,36 @@
       "display_name": "MAME 2003 Plus (Arcade)",
       "emulator": "retroarch",
       "description": "Arcade games"
+    },
+    "picodrive": {
+      "display_name": "PicoDrive (32X/Sega CD)",
+      "emulator": "retroarch",
+      "description": "Sega 32X, Sega CD, Genesis"
+    },
+    "mednafen_pce_fast": {
+      "display_name": "Beetle PCE FAST (PC Engine)",
+      "emulator": "retroarch",
+      "description": "PC Engine, TurboGrafx-16, PC Engine CD"
+    },
+    "opera": {
+      "display_name": "Opera (3DO)",
+      "emulator": "retroarch",
+      "description": "3DO Interactive Multiplayer"
+    },
+    "virtualjaguar": {
+      "display_name": "Virtual Jaguar",
+      "emulator": "retroarch",
+      "description": "Atari Jaguar"
+    },
+    "neocd": {
+      "display_name": "NeoCD (Neo Geo CD)",
+      "emulator": "retroarch",
+      "description": "SNK Neo Geo CD"
+    },
+    "same_cdi": {
+      "display_name": "SAME CDi (Philips CD-i)",
+      "emulator": "retroarch",
+      "description": "Philips CD-i"
     }
   },
 
@@ -589,6 +619,114 @@
       "screenscraper_id": 32,
       "thegamesdb_id": "0",
       "steam_category": "Xbox"
+    },
+    "segacd": {
+      "fullname": "Sega CD",
+      "manufacturer": "Sega",
+      "hardware_type": "console",
+      "release_year": 1991,
+      "default_emulator": "retroarch/genesis_plus_gx",
+      "extensions": [".cue", ".iso", ".chd", ".bin"],
+      "screenscraper_id": 20,
+      "thegamesdb_id": "21",
+      "steam_category": "SegaCD",
+      "legacy_tags": ["Sega CD", "Mega CD", "Mega-CD"]
+    },
+    "sega32x": {
+      "fullname": "Sega 32X",
+      "manufacturer": "Sega",
+      "hardware_type": "console",
+      "release_year": 1994,
+      "default_emulator": "retroarch/picodrive",
+      "extensions": [".32x", ".bin", ".md"],
+      "screenscraper_id": 19,
+      "thegamesdb_id": "33",
+      "steam_category": "Sega32X",
+      "legacy_tags": ["Sega 32X", "Genesis 32X", "Mega Drive 32X"]
+    },
+    "pcengine": {
+      "fullname": "PC Engine",
+      "manufacturer": "NEC",
+      "hardware_type": "console",
+      "release_year": 1987,
+      "default_emulator": "retroarch/mednafen_pce_fast",
+      "extensions": [".pce", ".cue", ".chd"],
+      "screenscraper_id": 31,
+      "thegamesdb_id": "34",
+      "steam_category": "TG16",
+      "legacy_tags": ["TurboGrafx-16", "PC Engine", "TurboGrafx 16"]
+    },
+    "pcenginecd": {
+      "fullname": "PC Engine CD",
+      "manufacturer": "NEC",
+      "hardware_type": "console",
+      "release_year": 1988,
+      "default_emulator": "retroarch/mednafen_pce_fast",
+      "extensions": [".cue", ".iso", ".chd"],
+      "screenscraper_id": 114,
+      "thegamesdb_id": "4955",
+      "steam_category": "TG16-CD",
+      "legacy_tags": ["TurboGrafx CD", "PC Engine CD-ROM", "TurboGrafx-CD"]
+    },
+    "3do": {
+      "fullname": "3DO",
+      "manufacturer": "Panasonic",
+      "hardware_type": "console",
+      "release_year": 1993,
+      "default_emulator": "retroarch/opera",
+      "extensions": [".iso", ".cue", ".chd"],
+      "screenscraper_id": 29,
+      "thegamesdb_id": "25",
+      "steam_category": "3DO",
+      "legacy_tags": ["3DO Interactive Multiplayer"]
+    },
+    "jaguar": {
+      "fullname": "Atari Jaguar",
+      "manufacturer": "Atari",
+      "hardware_type": "console",
+      "release_year": 1993,
+      "default_emulator": "retroarch/virtualjaguar",
+      "extensions": [".j64", ".jag"],
+      "screenscraper_id": 27,
+      "thegamesdb_id": "28",
+      "steam_category": "Jaguar",
+      "legacy_tags": ["Atari Jaguar"]
+    },
+    "jaguarcd": {
+      "fullname": "Atari Jaguar CD",
+      "manufacturer": "Atari",
+      "hardware_type": "console",
+      "release_year": 1995,
+      "default_emulator": "retroarch/virtualjaguar",
+      "extensions": [".j64", ".jag", ".cue", ".chd"],
+      "screenscraper_id": 171,
+      "thegamesdb_id": "29",
+      "steam_category": "JaguarCD",
+      "legacy_tags": ["Atari Jaguar CD", "Jaguar CD"]
+    },
+    "neogeocd": {
+      "fullname": "Neo Geo CD",
+      "manufacturer": "SNK",
+      "hardware_type": "console",
+      "release_year": 1994,
+      "default_emulator": "retroarch/neocd",
+      "extensions": [".cue", ".chd", ".iso"],
+      "screenscraper_id": 70,
+      "thegamesdb_id": "4956",
+      "steam_category": "NeoGeoCD",
+      "legacy_tags": ["Neo Geo CD", "Neo-Geo CD", "NeoGeo CD"]
+    },
+    "cdi": {
+      "fullname": "Philips CD-i",
+      "manufacturer": "Philips",
+      "hardware_type": "console",
+      "release_year": 1991,
+      "default_emulator": "retroarch/same_cdi",
+      "extensions": [".chd", ".iso", ".cue"],
+      "screenscraper_id": 133,
+      "thegamesdb_id": "4917",
+      "steam_category": "CDi",
+      "legacy_tags": ["Philips CD-i", "CD-i", "CDI"]
     }
   }
 }
