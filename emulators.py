@@ -561,30 +561,108 @@ class EmulatorRegistry:
         self._system_aliases: Dict[str, str] = {}
         self._load_config()
 
-    def _load_config(self) -> None:
-        """Load emulator configurations from emulators.json.
+    def _load_and_merge_configs(self) -> Dict:
+        """Load defaults and user config, deep-merging them together.
 
-        If the user config doesn't exist, copy defaults from package.
+        Defaults provide the base. User config overrides on top.
+        Sections merged: emulators, retroarch_cores, systems.
+        If the merge added anything new, writes merged config back.
+
+        Returns:
+            The merged configuration dictionary.
         """
-        # Copy defaults if user config doesn't exist
-        if not EMULATORS_CONFIG.exists() and DEFAULT_CONFIG.exists():
-            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            try:
-                shutil.copy2(DEFAULT_CONFIG, EMULATORS_CONFIG)
-                logger.info(f"Copied default emulators.json to {EMULATORS_CONFIG}")
-            except Exception as e:
-                logger.error(f"Failed to copy default config: {e}")
-
-        # Load user config or defaults
-        config_path = EMULATORS_CONFIG if EMULATORS_CONFIG.exists() else DEFAULT_CONFIG
-
-        if not config_path.exists():
-            logger.warning(f"No emulators config found at {config_path}")
-            return
+        # Load defaults
+        if not DEFAULT_CONFIG.exists():
+            logger.warning(f"Default emulators config not found: {DEFAULT_CONFIG}")
+            return {}
 
         try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                self._config = json.load(f)
+            with open(DEFAULT_CONFIG, 'r', encoding='utf-8') as f:
+                defaults = json.load(f)
+            logger.debug(f"Loaded defaults with {len(defaults.get('systems', {}))} systems")
+        except Exception as e:
+            logger.error(f"Failed to load default config: {e}")
+            return {}
+
+        # If no user config exists, write defaults as-is and return
+        if not EMULATORS_CONFIG.exists():
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            try:
+                with open(EMULATORS_CONFIG, 'w', encoding='utf-8') as f:
+                    json.dump(defaults, f, indent=2)
+                logger.info(f"Wrote default emulators.json to {EMULATORS_CONFIG}")
+            except Exception as e:
+                logger.error(f"Failed to write config: {e}")
+            return defaults
+
+        # Load user config
+        try:
+            with open(EMULATORS_CONFIG, 'r', encoding='utf-8') as f:
+                user_config = json.load(f)
+            logger.debug(f"Loaded user config with {len(user_config.get('systems', {}))} systems")
+        except json.JSONDecodeError as e:
+            logger.warning(f"User config corrupt, falling back to defaults: {e}")
+            return defaults
+        except Exception as e:
+            logger.error(f"Failed to load user config: {e}")
+            return defaults
+
+        # Deep merge: defaults -> base, user -> overlay
+        merged = dict(defaults)
+        changed = False
+
+        for section in ("emulators", "retroarch_cores", "systems"):
+            default_section = defaults.get(section, {})
+            user_section = user_config.get(section, {})
+
+            if not user_section:
+                continue
+
+            # Start with all default entries
+            merged_section = dict(default_section)
+            # Overlay user entries (user wins for same key)
+            for key, value in user_section.items():
+                if key in default_section:
+                    # User has customization - use theirs
+                    merged_section[key] = value
+                else:
+                    # User-only entry - preserve it (maybe they added custom system)
+                    merged_section[key] = value
+
+            merged[section] = merged_section
+
+            # Detect if defaults added new entries the user didn't have
+            new_keys = set(default_section.keys()) - set(user_section.keys())
+            if new_keys:
+                logger.info(f"Added {len(new_keys)} new {section} from defaults: "
+                           f"{', '.join(sorted(new_keys))}")
+                changed = True
+
+        # Write back merged config so next load is fast
+        if changed:
+            try:
+                # Preserve user's version if they have one, else use defaults version
+                merged["version"] = user_config.get("version", defaults.get("version", 1))
+                # Preserve user comments
+                if "_comment" in user_config:
+                    merged["_comment"] = user_config["_comment"]
+                with open(EMULATORS_CONFIG, 'w', encoding='utf-8') as f:
+                    json.dump(merged, f, indent=2)
+                logger.info(f"Wrote merged emulators.json to {EMULATORS_CONFIG}")
+            except Exception as e:
+                logger.warning(f"Failed to write merged config: {e} (continuing anyway)")
+
+        return merged
+
+    def _load_config(self) -> None:
+        """Load emulator configurations, merging defaults with user config.
+
+        Always loads the default emulators.json, then deep-merges the user's
+        config on top. This ensures users always get new systems and emulators
+        from updated defaults without losing their customizations.
+        """
+        try:
+            self._config = self._load_and_merge_configs()
 
             self._load_emulators()
             self._load_retroarch_cores()
@@ -594,10 +672,8 @@ class EmulatorRegistry:
                        f"{len(self._retroarch_cores)} RetroArch cores, "
                        f"{len(self._systems)} systems")
 
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse {config_path}: {e}")
         except Exception as e:
-            logger.error(f"Failed to load {config_path}: {e}")
+            logger.error(f"Failed to load emulators config: {e}")
 
     # Emulator IDs that use specialized plugin classes.
     SPECIALIZED_PLUGINS = {
