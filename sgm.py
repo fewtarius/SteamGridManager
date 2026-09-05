@@ -295,7 +295,9 @@ def _cmd_refresh_shortcuts(
     with a known ROM system category.
     """
     from shortcuts import read_shortcuts_vdf, generate_short_app_id
-    from art_scraper import CascadeScraper, save_grid_images, ART_TYPES
+    from art_scraper import CascadeScraper, save_grid_images, ART_TYPES, store_art_in_cache, DEFAULT_CACHE_DIR
+
+    cache_dir = Path(config.get('art_cache_dir', '') or DEFAULT_CACHE_DIR).expanduser()
 
     # Known ROM system tags — shortcuts with any of these are skipped
     ROM_TAGS = {
@@ -361,7 +363,9 @@ def _cmd_refresh_shortcuts(
             if not has:
                 missing_types.add(art_type)
         if missing_types:
-            to_scrape.append((sc, grid_id, missing_types))
+            # Detect Heroic-tagged shortcuts for cache key matching
+            is_heroic = sc.tags and any(v.lower() == 'heroic' for v in sc.tags.values())
+            to_scrape.append((sc, grid_id, missing_types, is_heroic))
 
     if not to_scrape:
         print("All non-ROM shortcuts already have artwork.")
@@ -371,7 +375,7 @@ def _cmd_refresh_shortcuts(
     print(f"  Shortcuts to scrape: {len(to_scrape)}")
     if dry_run:
         print()
-        for sc, short_id, missing in sorted(to_scrape, key=lambda x: x[0].appname):
+        for sc, short_id, missing, _is_h in sorted(to_scrape, key=lambda x: x[0].appname):
             print(f"  [WOULD SCRAPE] {sc.appname}  (missing: {', '.join(sorted(missing))})")
         print(f"\n  (dry run — no changes made)\n")
         return 0
@@ -388,13 +392,16 @@ def _cmd_refresh_shortcuts(
     total_skipped = 0
 
     print()
-    for sc, short_id, missing_types in sorted(to_scrape, key=lambda x: x[0].appname):
+    for sc, short_id, missing_types, is_heroic in sorted(to_scrape, key=lambda x: x[0].appname):
         print(f"  {sc.appname}", end='', flush=True)
         try:
-            artwork = scraper.scrape_game(sc.appname, wanted_types=missing_types)
+            system_name = 'Heroic' if is_heroic else ''
+            artwork = scraper.scrape_game(sc.appname, system_name=system_name, wanted_types=missing_types)
             if artwork:
                 saved = save_grid_images(short_id, artwork, grid_path)
                 total_downloaded += len(saved)
+                if saved:
+                    store_art_in_cache(sc.appname, system_name, saved, cache_dir=cache_dir)
                 missing_after = missing_types - set(saved.keys())
                 if missing_after:
                     total_failed += len(missing_after)
@@ -2569,8 +2576,9 @@ def cmd_heroic_refresh(args: argparse.Namespace, games: list[dict], config: dict
     Matches existing shortcuts that have the Heroic tag, checks which art types
     are missing, and downloads them via the art scraper.
     """
-    from art_scraper import save_grid_images
+    from art_scraper import save_grid_images, store_art_in_cache, DEFAULT_CACHE_DIR
 
+    cache_dir = Path(config.get('art_cache_dir', '') or DEFAULT_CACHE_DIR).expanduser()
     suffix_map = {'tall': 'p', 'wide': '', 'hero': '_hero', 'logo': '_logo', 'icon': '_icon'}
     runners_label = {'legendary': 'Epic', 'gog': 'GOG', 'nile': 'Amazon'}
 
@@ -2579,9 +2587,33 @@ def cmd_heroic_refresh(args: argparse.Namespace, games: list[dict], config: dict
                          if sc.tags and any(v.lower() == 'heroic' for v in sc.tags.values())]
 
     if not heroic_shortcuts:
-        print("\n  No existing Heroic shortcuts found.")
-        print("  Run 'sgm heroic' first to import your games.\n")
-        return 0
+        # shortcuts.vdf was likely wiped by a Steam update. Fall back to
+        # re-importing any Heroic games that are missing from Steam.
+        if games and scraper:
+            missing_titles = {g['title'].lower() for g in games} - existing_names
+            if missing_titles:
+                print("\n  No existing Heroic shortcuts found (shortcuts.vdf may be wiped).")
+                print(f"  Found {len(missing_titles)} Heroic game(s) to re-import.\n")
+                # Check if a backup exists for faster restore
+                try:
+                    from backup import list_backups
+                    backup_path = Path(config.get('backup_path',
+                        str(Path.home() / '.local' / 'share' / 'sgm' / 'backups')))
+                    backups = list_backups(backup_path)
+                    if backups:
+                        print(f"  A backup exists ({backups[0]['timestamp']}).")
+                        print(f"  Try 'sgm restore' first — it may recover your Heroic images.")
+                        print(f"  Otherwise, proceeding with re-import + art scraping:\n")
+                except Exception:
+                    pass
+            else:
+                print("\n  No existing Heroic shortcuts found and no Heroic games to import.")
+                print("  Run 'sgm heroic --list' to see installed Heroic games.\n")
+                return 0
+        else:
+            print("\n  No existing Heroic shortcuts found.")
+            print("  Run 'sgm heroic' first to import your games.\n")
+            return 0
 
     # Optionally filter by runner by matching against known Heroic games
     if runner_filter:
@@ -2633,10 +2665,12 @@ def cmd_heroic_refresh(args: argparse.Namespace, games: list[dict], config: dict
 
         if not dry_run:
             try:
-                artwork = scraper.scrape_game(sc.appname, wanted_types=missing_types)
+                artwork = scraper.scrape_game(sc.appname, system_name='Heroic', wanted_types=missing_types)
                 if artwork:
                     saved = save_grid_images(str(short_id), artwork, grid_path)
                     art_downloaded += len(saved)
+                    if saved:
+                        store_art_in_cache(sc.appname, 'Heroic', saved, cache_dir=cache_dir)
                     if len(saved) < len(missing_types):
                         art_failed += len(missing_types) - len(saved)
             except Exception as e:
@@ -2839,7 +2873,8 @@ def cmd_heroic(args: argparse.Namespace) -> int:
 
             # Download art
             if scraper:
-                from art_scraper import save_grid_images
+                from art_scraper import save_grid_images, store_art_in_cache, DEFAULT_CACHE_DIR
+                cache_dir = Path(config.get('art_cache_dir', '') or DEFAULT_CACHE_DIR).expanduser()
                 suffix_map = {'tall': 'p', 'wide': '', 'hero': '_hero', 'logo': '_logo', 'icon': '_icon'}
                 missing_types = set()
                 for art_type, suffix in suffix_map.items():
@@ -2852,10 +2887,12 @@ def cmd_heroic(args: argparse.Namespace) -> int:
 
                 if missing_types:
                     try:
-                        artwork = scraper.scrape_game(title, wanted_types=missing_types)
+                        artwork = scraper.scrape_game(title, system_name='Heroic', wanted_types=missing_types)
                         if artwork:
                             saved = save_grid_images(str(short_id), artwork, grid_path)
                             art_downloaded += len(saved)
+                            if saved:
+                                store_art_in_cache(title, 'Heroic', saved, cache_dir=cache_dir)
                             if len(saved) < len(missing_types):
                                 art_failed += len(missing_types) - len(saved)
                     except Exception as e:
