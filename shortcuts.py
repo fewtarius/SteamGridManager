@@ -11,6 +11,8 @@ to store non-Steam game shortcuts.
 import binascii
 import json
 import logging
+import os
+import re
 import struct
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -535,6 +537,87 @@ def find_localconfig_vdf(steam_path: Path, user_id: Optional[str] = None) -> Pat
     raise FileNotFoundError("localconfig.vdf not found in Steam userdata")
 
 
+#═══════════════════════════════════════════════════════════════════════
+# localconfig.vdf user-collections cache helpers
+#═══════════════════════════════════════════════════════════════════════
+# Steam keeps a JSON cache of user collections in localconfig.vdf under the
+# "user-collections" key as a VDF-escaped string value. The read/parse/
+# serialize logic previously lived (with divergent escaping) in three separate
+# call sites; it is centralized here as the single authoritative implementation.
+
+_LOCALCOL_RE = re.compile(r'("user-collections"\t+)"(.*?)"(\s*\n)', re.DOTALL)
+
+
+def _unescape_vdf_json(raw: str) -> str:
+    """Unescape a VDF-embedded JSON string value into plain JSON."""
+    return raw.replace(chr(92) + chr(92), chr(1)).replace(chr(92) + chr(34), chr(34)).replace(chr(1), chr(92))
+
+
+def _read_localconfig_collections(vdf_path: Path) -> Optional[dict]:
+    """Parse the user-collections JSON from localconfig.vdf.
+
+    Returns the parsed dict, or None if the file/key is absent, unreadable,
+    or contains invalid JSON.
+    """
+    try:
+        content = vdf_path.read_text(encoding="utf-8")
+    except OSError as e:
+        logger.warning(f"Failed to read localconfig.vdf: {e}")
+        return None
+
+    match = _LOCALCOL_RE.search(content)
+    if not match:
+        return None
+
+    raw_json = _unescape_vdf_json(match.group(2))
+    try:
+        return json.loads(raw_json)
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse user-collections JSON: {e}")
+        return None
+
+
+def _write_localconfig_collections(vdf_path: Path, collections: dict) -> bool:
+    """Write user-collections JSON back into localconfig.vdf (idempotent).
+
+    Inner double quotes are re-escaped and the surrounding key and whitespace
+    are preserved. A new key is inserted when one does not yet exist.
+    """
+    try:
+        content = vdf_path.read_text(encoding="utf-8")
+    except OSError as e:
+        logger.warning(f"Failed to read localconfig.vdf: {e}")
+        return False
+
+    new_json = json.dumps(collections, separators=(",", ":")).replace("\\", "\\\\").replace('"', '\\"')
+    match = _LOCALCOL_RE.search(content)
+    if match:
+        new_content = (
+            content[: match.start()]
+            + match.group(1)
+            + f'"{new_json}"'
+            + match.group(3)
+            + content[match.end():]
+        )
+    else:
+        insert_line = f'\t\t"user-collections"\t\t"{new_json}"\n'
+        insert_match = re.search(r'("user-roaming-config-store".*?\n)', content, re.DOTALL)
+        if insert_match:
+            pos = insert_match.end()
+            new_content = content[:pos] + insert_line + content[pos:]
+        else:
+            new_content = content.rstrip() + "\n" + insert_line
+
+    try:
+        tmp = vdf_path.with_suffix(".vdf.sgm_tmp")
+        tmp.write_text(new_content, encoding="utf-8")
+        os.replace(tmp, vdf_path)
+    except OSError as e:
+        logger.warning(f"Failed to write localconfig.vdf: {e}")
+        return False
+    return True
+
+
 def update_steam_collections(steam_path: Path,
                               shortcuts_by_category: Dict[str, List[int]],
                               user_id: Optional[str] = None) -> bool:
@@ -824,30 +907,8 @@ def update_steam_collections(steam_path: Path,
         logger.warning(f"Failed to write cloud storage collections: {e}")
         return False
 
-    # 5. Update localconfig.vdf user-collections cache (best-effort)
-    try:
-        content = vdf_path.read_text(encoding="utf-8")
-    except OSError as e:
-        logger.error(f"Failed to read localconfig.vdf: {e}")
-        return True  # cloud write succeeded; localconfig is optional cache
-
-    pattern = re.compile(r'("user-collections"\t+)"(.*?)"(\s*\n)', re.DOTALL)
-    match = pattern.search(content)
-
-    if match:
-        raw_json = match.group(2)
-        # VDF escaping: inner quotes are stored as \" in the file, which Python
-        # reads as the two chars \  ". We need to unescape them to parse JSON.
-        raw_json = raw_json.replace('\\\\"', '\x01').replace('\\"', '"').replace('\x01', '\\"')
-        try:
-            collections: dict = json.loads(raw_json)
-        except json.JSONDecodeError:
-            collections = {}
-    else:
-        collections = {}
-
+    collections = _read_localconfig_collections(vdf_path) or {}
     # Remove old srm-* keys, legacy collection keys, and strip "name" from entries.
-    # Also remove any legacy collection IDs that were merged.
     legacy_coll_id_set = {key.replace("user-collections.", "") for key in legacy_coll_ids}
     cleaned: dict = {}
     for k, v in collections.items():
@@ -860,34 +921,10 @@ def update_steam_collections(steam_path: Path,
         cleaned[k] = v
     cleaned.update(new_collections)
     collections = cleaned
-
-    new_json = json.dumps(collections, separators=(",", ":")).replace('"', '\\"')
-
-    if match:
-        new_content = (
-            content[: match.start()]
-            + match.group(1)
-            + f'"{new_json}"'
-            + match.group(3)
-            + content[match.end():]
-        )
-    else:
-        insert_line = f'\t\t"user-collections"\t\t"{new_json}"\n'
-        insert_match = re.search(r'("user-roaming-config-store".*?\n)', content, re.DOTALL)
-        if insert_match:
-            pos = insert_match.end()
-            new_content = content[:pos] + insert_line + content[pos:]
-        else:
-            new_content = content.rstrip() + "\n" + insert_line
-
-    try:
-        import os
-        tmp = vdf_path.with_suffix(".vdf.sgm_tmp")
-        tmp.write_text(new_content, encoding="utf-8")
-        os.replace(tmp, vdf_path)
+    if _write_localconfig_collections(vdf_path, collections):
         logger.info("Updated localconfig.vdf with Steam collections")
-    except OSError as e:
-        logger.error(f"Failed to write localconfig.vdf: {e}")
+    else:
+        logger.error("Failed to write localconfig.vdf")
 
     return True
 
@@ -1100,29 +1137,11 @@ def read_cloud_collections(steam_path: Path,
 
 def _get_collection_name_from_localconfig(vdf_path: Path, coll_id: str) -> str:
     """Look up a collection name from localconfig.vdf user-collections cache."""
-    import json
-    import re
-    try:
-        content = vdf_path.read_text(encoding="utf-8")
-    except OSError:
-        return ""
-
-    pattern = re.compile(r'"user-collections"	+"(.*?)"(\s*\n)', re.DOTALL)
-    match = pattern.search(content)
-    if not match:
-        return ""
-
-    raw_json = match.group(2)
-    raw_json = raw_json.replace('\"', '\x01').replace('\"', '"').replace('\x01', '\"')
-    try:
-        collections: dict = json.loads(raw_json)
-    except json.JSONDecodeError:
-        return ""
-
+    collections = _read_localconfig_collections(vdf_path) or {}
     entry = collections.get(coll_id, {})
-    return entry.get("name", "")
-
-
+    if isinstance(entry, dict):
+        return entry.get("name", "")
+    return ""
 
 
 def modify_cloud_collection(steam_path: Path,
@@ -1263,58 +1282,13 @@ def modify_cloud_collection(steam_path: Path,
 
 def _update_localconfig_collection(vdf_path: Path, coll_id: str, value: dict) -> None:
     """Update localconfig.vdf user-collections cache for a specific collection."""
-    import re
-    try:
-        content = vdf_path.read_text(encoding="utf-8")
-    except OSError:
-        return
-
-    pattern = re.compile(r'"user-collections"	+"(.*?)"(\s*)', re.DOTALL)
-    match = pattern.search(content)
-
-    if match:
-        raw_json = match.group(2)
-        raw_json = raw_json.replace('\"', '').replace('\"', '"').replace('', '\"')
-        try:
-            collections: dict = json.loads(raw_json)
-        except json.JSONDecodeError:
-            collections = {}
-    else:
-        collections = {}
-
+    collections = _read_localconfig_collections(vdf_path) or {}
     collections[coll_id] = {
         "id": value.get("id", coll_id),
         "added": value.get("added", []),
         "removed": value.get("removed", []),
     }
-
-    new_json = json.dumps(collections, separators=(",", ":")).replace('"', '\"')
-
-    if match:
-        new_content = (
-            content[: match.start()]
-            + match.group(1)
-            + f'"{new_json}"'
-            + match.group(3)
-            + content[match.end():]
-        )
-    else:
-        insert_line = f'\t\t"user-collections"\t\t"{new_json}"\n'
-        insert_match = re.search(r'("user-roaming-config-store".*?\n)', content, re.DOTALL)
-        if insert_match:
-            pos = insert_match.end()
-            new_content = content[:pos] + insert_line + content[pos:]
-        else:
-            new_content = content.rstrip() + "\n" + insert_line
-
-    try:
-        import os
-        tmp = vdf_path.with_suffix(".vdf.sgm_tmp")
-        tmp.write_text(new_content, encoding="utf-8")
-        os.replace(tmp, vdf_path)
-        logger.debug(f"Updated localconfig.vdf for collection {coll_id}")
-    except OSError as e:
-        logger.warning(f"Failed to update localconfig.vdf: {e}")
+    _write_localconfig_collections(vdf_path, collections)
 
 
 def delete_cloud_collection(steam_path: Path,

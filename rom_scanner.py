@@ -79,23 +79,6 @@ DISC_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-# GoodTools dump info patterns  e.g., (2000)(GOD)(NTSC)(US)[!]
-GOODTOOLS_TAG = re.compile(
-    r'[\(\[]\d{4}\)[\(\[]'   # (2000)(
-    r'|[\(\[]\w+\)\s*[\(\[]' # followed by more tags
-)
-
-# Common patterns in Dreamcast/Saturn folder-based ROMs
-FOLDER_ROM_PATTERN = re.compile(
-    r'\s+v[\d.]+\s*\(\d{4}\)\([^)]+\)\([^)]+\)\([^)]+\)',
-    re.IGNORECASE
-)
-
-# No-Intro naming convention: "Game Title (Region) (Rev X) [flags]"
-NOINTRO_SUFFIX = re.compile(
-    r'\s*\([^)]*\)\s*(?:\[[^\]]*\]\s*)*$'
-)
-
 
 def extract_region(filename: str) -> Optional[str]:
     """Extract region code from a ROM filename.
@@ -395,7 +378,6 @@ def scan_all_systems(rom_root: Path) -> Dict[str, List[RomEntry]]:
             # Subdirectory inside a known system folder - skip here, scan_rom_folder
             # will recurse into it to find ROM files.
             continue
-            continue
 
         # Use the canonical system ID (aliases like "zmachine" resolve to "infocom")
         canonical_id = system_def._id
@@ -482,7 +464,6 @@ def parse_sfo(path: Path) -> Optional[Dict[str, str]]:
         key_name_offset = struct.unpack_from('<H', data, entry_offset)[0]
         data_fmt = struct.unpack_from('<H', data, entry_offset + 0x02)[0]
         data_len = struct.unpack_from('<I', data, entry_offset + 0x04)[0]
-        # data_max_len = struct.unpack_from('<I', data, entry_offset + 0x08)[0]
         data_entry_offset = struct.unpack_from('<I', data, entry_offset + 0x0C)[0]
 
         # Read key name (null-terminated string)

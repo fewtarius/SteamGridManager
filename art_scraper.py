@@ -373,37 +373,53 @@ def _http_get(url: str, headers: Optional[Dict[str, str]] = None,
 
 
 def _http_get_json(url: str, headers: Optional[Dict[str, str]] = None,
-                   timeout: int = 30) -> Optional[dict]:
-    """HTTP GET returning parsed JSON.
+                   timeout: int = 30, retries: int = 3) -> Optional[dict]:
+    """HTTP GET returning parsed JSON, with retry/backoff for transient errors.
 
-    Tries urllib first; if the status is not 200 (e.g. 403 Cloudflare block),
-    falls back to curl subprocess which uses a real browser-like UA.
+    Tries urllib first; if the status is not 200 (e.g. 403), falls back to a
+    curl subprocess for that attempt. Retries retryable statuses (rate limits
+    and server errors, plus network failures) with exponential backoff so
+    temporary throttling never silently drops a result.
     """
     import subprocess
-    body, status, _ = _http_get(url, headers, timeout)
-    if status == 200:
-        try:
-            return json.loads(body)
-        except json.JSONDecodeError as e:
-            logger.debug(f"JSON decode error from {url}: {e}")
-            return None
+    last_status = 0
+    for attempt in range(retries):
+        body, status, _ = _http_get(url, headers, timeout)
+        last_status = status
 
-    # Fall back to curl
-    logger.debug(f"urllib HTTP {status} from {url}, retrying with curl")
-    cmd = ['curl', '-s', '-L', '-A', 'SGM/1.0']
-    if headers:
-        for k, v in headers.items():
-            cmd += ['-H', f'{k}: {v}']
-    cmd.append(url)
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        if result.returncode == 0 and result.stdout:
+        if status == 200:
             try:
-                return json.loads(result.stdout)
+                return json.loads(body)
             except json.JSONDecodeError as e:
-                logger.debug(f"curl JSON decode error from {url}: {e}")
-    except Exception as e:
-        logger.debug(f"curl fallback failed for {url}: {e}")
+                logger.debug(f"JSON decode error from {url}: {e}")
+                return None  # 200 with an unparseable body is not transient
+
+        # Non-200: fall back to curl (urllib's UA may be blocked upstream).
+        logger.debug(f"urllib HTTP {status} from {url}, trying curl")
+        cmd = ['curl', '-s', '-L', '-A', 'SGM/1.0']
+        if headers:
+            for k, v in headers.items():
+                cmd += ['-H', f'{k}: {v}']
+        cmd.append(url)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            if result.returncode == 0 and result.stdout:
+                try:
+                    return json.loads(result.stdout)
+                except json.JSONDecodeError as e:
+                    logger.debug(f"curl JSON decode error from {url}: {e}")
+        except Exception as e:
+            logger.debug(f"curl fallback failed for {url}: {e}")
+
+        # Retry only transient failures; abort immediately on permanent errors.
+        if status in (429, 500, 502, 503, 504, 0) and attempt < retries - 1:
+            wait = 2 ** attempt  # 1s, 2s, 4s
+            logger.info(f"Retryable status {status} from {url}, retrying in {wait}s (attempt {attempt + 2}/{retries})")
+            time.sleep(wait)
+        else:
+            break
+
+    logger.warning(f"HTTP {last_status} from {url} after {retries} attempts")
     return None
 
 
@@ -1065,7 +1081,6 @@ class CascadeScraper:
         cached = get_cached_art(title, system_name, cache_dir=self.cache_dir)
         for art_type, cached_path in cached.items():
             if art_type in remaining:
-                # Return a synthetic ArtResult pointing at the cached file
                 # Return a synthetic ArtResult pointing at the cached file
                 # using a file:// URL so callers don't need special handling.
                 results[art_type] = ArtResult(

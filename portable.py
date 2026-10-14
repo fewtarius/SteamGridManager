@@ -115,10 +115,11 @@ def export_bundle(grid_path: Path,
         unsigned_id = sc.appid if sc.appid >= 0 else sc.appid + 0x100000000
         shortcut_map[str(unsigned_id)] = sc
 
-    # Image type suffixes
+    # Image type suffixes (Steam grid naming): {appid}.png = wide,
+    # {appid}p.png = tall, {appid}_hero.png, etc.
     suffixes = {
-        "": "tall",
-        "p": "wide",
+        "": "wide",
+        "p": "tall",
         "_hero": "hero",
         "_logo": "logo",
         "_icon": "icon",
@@ -146,9 +147,9 @@ def export_bundle(grid_path: Path,
                     break
 
             if app_id is None:
-                # No suffix = tall capsule
+                # No suffix = wide capsule  ({appid}.png)
                 app_id = stem
-                art_type = "tall"
+                art_type = "wide"
 
             if not app_id.isdigit():
                 continue
@@ -276,10 +277,10 @@ def import_bundle(bundle_path: Path,
     skipped = 0
     errors = 0
 
-    # Image type -> filename suffix
+    # Image type -> filename suffix (inverse of export's suffixes map)
     suffix_map = {
-        "tall": "",
-        "wide": "p",
+        "tall": "p",
+        "wide": "",
         "hero": "_hero",
         "logo": "_logo",
         "icon": "_icon",

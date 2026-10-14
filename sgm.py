@@ -296,20 +296,17 @@ def _cmd_refresh_shortcuts(
     """
     from shortcuts import read_shortcuts_vdf, generate_short_app_id
     from art_scraper import CascadeScraper, save_grid_images, ART_TYPES, store_art_in_cache, DEFAULT_CACHE_DIR
+    from reconcile import get_known_rom_tags
 
     cache_dir = Path(config.get('art_cache_dir', '') or DEFAULT_CACHE_DIR).expanduser()
 
-    # Known ROM system tags — shortcuts with any of these are skipped
-    ROM_TAGS = {
-        'Atari 2600', 'Master System', 'VIC-20', 'Game Gear',
-        'Nintendo Entertainment System', 'Super Nintendo', 'ColecoVision',
-        'Arcade', 'Genesis', 'Atari 5200', 'Atari Lynx', 'Commodore 64',
-        'Atari 7800', 'Game Boy Advance', 'Infocom / Z-Machine', 'Z-Machine',
-        'Amiga', 'Game Boy', 'Intellivision', 'GameCube', 'PlayStation Portable',
-        'Wii U', 'Game Boy Color', 'Dreamcast', 'PlayStation 2', 'Nintendo DS',
-        'Xbox', 'DOS', 'Neo Geo', 'PlayStation', 'Wii', 'Nintendo 64',
-        'Sega Saturn', 'SNES', 'NES', 'PC Engine', 'TurboGrafx-16',
-    }
+    # Authoritative set of ROM system category tags (canonical + legacy aliases)
+    # sourced from the system definitions in defaults/emulators.json. A single
+    # hardcoded copy drifts from the registry: it omitted Sega CD, 32X, 3DO,
+    # Jaguar, Neo Geo CD, CD-i and used inconsistent spellings (e.g.
+    # 'Commodore 64' instead of the canonical 'C64') that never matched the
+    # tags rom_scanner actually writes.
+    rom_tags = get_known_rom_tags()
 
     # Find shortcuts.vdf
     user_id = config.get('steam_user_id', 'auto')
@@ -324,7 +321,7 @@ def _cmd_refresh_shortcuts(
     # Filter to non-ROM shortcuts
     non_rom = [
         sc for sc in shortcuts
-        if not any(str(v) in ROM_TAGS for v in sc.tags.values())
+        if not any(str(v) in rom_tags for v in sc.tags.values())
     ]
 
     # Determine which art types to look for
@@ -3071,15 +3068,10 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         for name in sorted(report.empty_collections):
             print(f"    {name}")
 
-    # ── Determine what to clean ─────────────────────────────────────
-    clean_shortcuts = getattr(args, 'clean_shortcuts', False)
-    clean_art = getattr(args, 'clean_art', False)
-    clean_collections = getattr(args, 'clean_collections', False)
-    clean_unlinked = getattr(args, 'clean_unlinked', False)
-    clean_all = getattr(args, 'clean', False)
+    # ── Flags for dedup mode (cleanup flags are resolved below) ──
+    dedup = getattr(args, 'dedup', False)
     dry_run = getattr(args, 'dry_run', False)
     force = getattr(args, 'force', False)
-    dedup = getattr(args, 'dedup', False)
 
     # ── Dedup mode (separate from orphan cleanup) ──────────────────
     if dedup:

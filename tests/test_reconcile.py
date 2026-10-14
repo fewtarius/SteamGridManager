@@ -556,3 +556,27 @@ class TestFindDuplicateShortcuts:
         assert kept == 1
         # Should not have written anything
         mock_write.assert_not_called()
+
+# ═══════════════════════════════════════════════════════════════════════
+# get_known_rom_tags tests
+# ═══════════════════════════════════════════════════════════════════════
+class TestGetKnownRomTags:
+    """Guard against the hardcoded-ROM_TAGS drift regression."""
+
+    def test_includes_canonical_tag_for_every_system(self):
+        """Every system's steam_category (the tag rom_scanner writes) must be covered."""
+        from emulators import get_registry
+        registry = get_registry()
+        tags = get_known_rom_tags()
+        for sys_id, sys_def in registry.list_systems().items():
+            canonical = sys_def.get_steam_category()
+            assert canonical in tags, (
+                f"system {sys_id!r} canonical tag {canonical!r} missing from "
+                f"get_known_rom_tags() — sgm.py would mis-scope its shortcuts"
+            )
+
+    def test_includes_newly_added_cd_systems(self):
+        """Systems added in 84f1747 must be present (hardcoded list missed them)."""
+        tags = get_known_rom_tags()
+        for expected in ("Sega CD", "3DO", "Jaguar", "Neo Geo CD", "CD-i", "CDI"):
+            assert expected in tags, f"{expected!r} not in known ROM tags"

@@ -140,8 +140,8 @@ def get_grid_stats(grid_path: Path) -> dict:
         'symlinks': 0,
         'total_size': 0,
         'by_type': {
-            'tall': 0,     # {appid}.png/jpg
-            'wide': 0,     # {appid}p.png/jpg
+            'tall': 0,     # {appid}p.png/jpg
+            'wide': 0,     # {appid}.png/jpg
             'hero': 0,     # {appid}_hero.png/jpg
             'logo': 0,     # {appid}_logo.png/jpg
             'icon': 0,     # {appid}_icon.png/jpg
@@ -177,16 +177,17 @@ def get_grid_stats(grid_path: Path) -> dict:
         elif '_icon.' in name:
             stats['by_type']['icon'] += 1
         elif name[0].isdigit() and 'p.' in name:
-            # Check for wide capsule pattern: {appid}p.png
+            # Tall capsule pattern: {appid}p.png (600x900, portrait)
             base = name.split('.')[0]
             if base.endswith('p') and base[:-1].isdigit():
-                stats['by_type']['wide'] += 1
+                stats['by_type']['tall'] += 1
             else:
                 stats['by_type']['other'] += 1
         elif name[0].isdigit():
+            # Wide capsule pattern: {appid}.png (920x430, landscape)
             base = name.split('.')[0]
             if base.isdigit():
-                stats['by_type']['tall'] += 1
+                stats['by_type']['wide'] += 1
             else:
                 stats['by_type']['other'] += 1
         else:

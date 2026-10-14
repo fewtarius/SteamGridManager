@@ -788,7 +788,7 @@ def reconcile(
 
     report.unlinked_art = find_unlinked_art(grid_path, all_shortcut_ids)
 
-    # 5. Find empty collections
+    # 6. Find empty collections
     try:
         from shortcuts import read_cloud_collections
         collections = read_cloud_collections(steam_path, user_id)
