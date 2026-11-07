@@ -245,6 +245,11 @@ best container: `.chd` over `.cue` over `.iso` over `.bin`. A `.bin`/`.cue` pair
 is one game, not two, and the cue sheet wins because it carries the track
 layout. Extra discs fold into the first entry rather than adding duplicates.
 
+CUE sheets are normalized to LF line endings during import. PCSX2's CUE parser
+does not handle CRLF, so a sheet whose `FILE` token carries a trailing `\r`
+makes the referenced binary unfindable and the game fails to boot with "Unable
+to identify the ISO image type". The rewrite is lossless and idempotent.
+
 ### Flatpak Permissions
 
 Flatpak emulators run in a sandbox and cannot reach your ROMs unless the folder

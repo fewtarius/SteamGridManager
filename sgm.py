@@ -1585,7 +1585,7 @@ def cmd_rom(args: argparse.Namespace) -> int:
     """ROM management commands."""
     from config import config_exists, get_resolved_config
     from steam import find_steam_path, find_grid_path
-    from rom_scanner import scan_all_systems, scan_rom_folder
+    from rom_scanner import scan_all_systems, scan_rom_folder, normalize_cue_file
     from systems import get_system, list_supported_systems
     from shortcuts import (
         generate_short_app_id, generate_shortcut_id,
@@ -1706,6 +1706,18 @@ def cmd_rom(args: argparse.Namespace) -> int:
         if not all_roms:
             print("No ROMs found to import.")
             return 0
+
+        # Normalize CUE sheets to LF. PCSX2's cue parser does not handle CRLF
+        # and will refuse to load a sheet whose FILE token carries a trailing
+        # \r, so this must happen before any shortcut points at one.
+        if not args.dry_run:
+            cue_fixed = 0
+            for roms in all_roms.values():
+                for rom in roms:
+                    if rom.extension.lower() == ".cue" and normalize_cue_file(rom.path):
+                        cue_fixed += 1
+            if cue_fixed:
+                print(f"Normalized {cue_fixed} CUE sheet(s) to LF line endings")
 
         total_roms = sum(len(v) for v in all_roms.values())
         print(f"\nFound {total_roms} ROMs across {len(all_roms)} systems")

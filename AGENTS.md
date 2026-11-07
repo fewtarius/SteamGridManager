@@ -366,6 +366,11 @@ complete container: `.chd` > `.cue`/`.gdi` > `.m3u` > `.iso` > `.bin`. A
 bare bin lacks. Later discs set `is_multi_disc` on the first entry instead of
 adding a shortcut.
 
+CUE sheets are normalized to LF during import. PCSX2's CUE parser splits on
+`\n` only and does not strip carriage returns, so a CRLF sheet makes the `FILE`
+token resolve to `game.bin\r` and the binary cannot be found.
+`normalize_cue_file` rewrites the sheet losslessly and is idempotent.
+
 **Title cleaning pipeline:**
 1. Strip file extension (without using `Path.stem` which breaks on dots in parentheses)
 2. Handle GoodTools format: `Game v1.001 (2000)(Publisher)(NTSC)(US)[!]`
@@ -558,6 +563,7 @@ python3 -m py_compile steam.py
 python3 -m py_compile monitor.py
 python3 -m py_compile systems.py
 python3 -m py_compile rom_scanner.py
+python3 -m py_compile sgm.py
 python3 -m py_compile shortcuts.py
 python3 -m py_compile art_scraper.py
 python3 -m py_compile permissions.py
@@ -599,6 +605,7 @@ python3 sgm.py rom import /run/media/primary/Roms --system c64 --dry-run
 - `tests/test_screenscraper_ids.py` - Platform ID correctness and uniqueness
 - `tests/test_art_scraper_requests.py` - URL redaction, retry policy, empty-match handling
 - `tests/test_rom_scanner_containers.py` - Container preference, bin/cue dedup, CHD discovery
+- `tests/test_cue_normalization.py` - CUE sheet LF normalization for PCSX2
 - `tests/test_permissions.py` - Flatpak coverage rules and grant behaviour
 
 **Test Requirements:**

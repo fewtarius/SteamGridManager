@@ -401,6 +401,45 @@ def _is_folder_rom(folder: Path, system_def: SystemDef) -> bool:
     return False
 
 
+def normalize_cue_file(cue_path: Path) -> bool:
+    """Normalize a CUE sheet's line endings to LF.
+
+    PCSX2's CUE parser splits on ``\\n`` only and does not strip carriage
+    returns, so a CRLF file makes every token carry a trailing ``\\r``. The
+    ``FILE`` directive then resolves to ``game.bin\\r`` and the referenced
+    binary cannot be found, which surfaces as "Unable to identify the ISO
+    image type". Rewriting to LF is lossless and makes the sheet parseable.
+
+    Args:
+        cue_path: Path to a ``.cue`` file.
+
+    Returns:
+        True if the file was rewritten, False if it was already LF-only or
+        could not be read.
+    """
+    try:
+        data = cue_path.read_bytes()
+    except OSError as e:
+        logger.debug(f"Cannot read cue sheet {cue_path}: {e}")
+        return False
+
+    if b"\r\n" not in data and b"\r" not in data:
+        return False
+
+    lf = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    if lf == data:
+        return False
+
+    try:
+        cue_path.write_bytes(lf)
+    except OSError as e:
+        logger.warning(f"Could not normalize {cue_path}: {e}")
+        return False
+
+    logger.info(f"Normalized CUE line endings to LF: {cue_path}")
+    return True
+
+
 def scan_all_systems(rom_root: Path) -> Dict[str, List[RomEntry]]:
     """Scan all system folders under a ROM root directory.
 
