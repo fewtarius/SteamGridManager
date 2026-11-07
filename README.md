@@ -236,8 +236,41 @@ Import does the following:
 2. Creates Steam shortcuts (won't duplicate existing entries)
 3. Downloads artwork from configured providers
 4. Saves images with correct Steam grid naming
+5. Grants flatpak emulators access to the ROM folder, if needed
 
 Restart Steam after importing to see the new entries.
+
+Where a game exists as several files, import keeps one shortcut and picks the
+best container: `.chd` over `.cue` over `.iso` over `.bin`. A `.bin`/`.cue` pair
+is one game, not two, and the cue sheet wins because it carries the track
+layout. Extra discs fold into the first entry rather than adding duplicates.
+
+### Flatpak Permissions
+
+Flatpak emulators run in a sandbox and cannot reach your ROMs unless the folder
+is granted to them. Read-only is not enough either: PCSX2 writes an ISO cache
+beside the disc image and refuses to boot when that write fails, which looks
+like a broken shortcut rather than a sandbox restriction.
+
+`sgm rom import` grants what it just used. To check every configured emulator:
+
+```bash
+sgm rom permissions ~/Roms             # audit
+sgm rom permissions ~/Roms --fix       # grant what is missing
+```
+
+```
+  ok    Cemu                 info.cemu.Cemu
+  needs Dolphin              org.DolphinEmu.dolphin-emu
+          /home/deck/Roms
+  ok    FCEUmm (NES)         org.libretro.RetroArch
+  needs PCSX2                net.pcsx2.PCSX2
+          /home/deck/Roms
+```
+
+Grants are user-level (`flatpak override --user`), scoped to the folders you
+name, and re-running changes nothing that is already correct. Restart any
+running emulator afterwards so it picks up the new permissions.
 
 ### List Supported Systems
 

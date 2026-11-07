@@ -67,6 +67,7 @@ sgm.py (CLI entry point / argparse, v1.0.0)
     │                         └── Save with correct naming
     │
     ├── sgm rom ──────────> rom_scanner.py + systems.py + shortcuts.py + art_scraper.py
+    │                                    + permissions.py
     │   ├── scan              ├── Scan ROM folders by system
     │   │                     ├── Clean titles (GoodTools/No-Intro/Redump)
     │   │                     └── Group multi-disc games
@@ -113,6 +114,7 @@ sgm.py (CLI entry point / argparse, v1.0.0)
 | `shortcuts.py` | SRM-compatible shortcut ID generation, shortcuts.vdf R/W |
 | `art_scraper.py` | Multi-provider art scraper (ScreenScraper/GamesDB/SGDB) |
 | `portable.py` | Cross-device export/import with manifest bundles |
+| `permissions.py` | Flatpak sandbox grants so emulators can reach ROM folders |
 | `sgm-monitor.service` | systemd user service unit |
 | `sgm-monitor.timer` | systemd user timer unit |
 | `install.sh` | Quick installer for SteamOS |
@@ -279,42 +281,90 @@ The `artworkCache.json` from Steam ROM Manager maps SteamGridDB game IDs to artw
 
 ## ROM Management Architecture
 
-### System Definitions (`systems.py`)
+### Configuration Layering (`defaults/emulators.json` + `~/.config/sgm/emulators.json`)
 
-Each system is defined with:
+System and emulator definitions live in **`defaults/emulators.json`**, shipped
+with the app. The user's config holds only their own overrides:
 
-```python
-@dataclass
-class SystemDef:
-    name: str               # Folder name (e.g., "c64")
-    fullname: str           # Display name (e.g., "Commodore 64")
-    manufacturer: str       # "Commodore", "Atari", etc.
-    extensions: list[str]   # Valid ROM file extensions
-    screenscraper_id: int   # ScreenScraper platform ID (0 = unsupported)
-    thegamesdb_id: int      # TheGamesDB platform ID (0 = unsupported)
-    sgdb_platform_id: int   # SteamGridDB platform search param (0 = any)
-    emulator: EmulatorConfig  # How to launch the ROM
+```
+defaults/emulators.json          definitions, always current with the release
+~/.config/sgm/emulators.json     user customizations, sparse by design
 ```
 
-**Adding a new system:**
-```python
-# In SYSTEMS dict in systems.py:
-"newsystem": SystemDef(
-    name="newsystem",
-    fullname="New System",
-    manufacturer="Publisher",
-    extensions=[".ext1", ".ext2"],
-    screenscraper_id=123,     # Look up at screenscraper.fr
-    thegamesdb_id=456,        # Look up at thegamesdb.net/list_platforms.php
-    sgdb_platform_id=0,       # 0 = search all platforms
-    emulator=EmulatorConfig(
-        emulator_type="retroarch",
-        core_name="newsystem_core",
-    ),
-),
+`EmulatorRegistry._load_and_merge_configs()` layers the user file over the
+defaults in memory. It never writes the merged result back: doing so expanded
+the user file into a full copy of the defaults, which pinned every value
+against future corrections.
+
+**Code-owned keys.** Some system keys describe upstream services, fixed hardware
+facts, or how files are recognised. They come from the defaults and are neither
+read from nor written to the user config:
+
+| Key | Why code-owned |
+|-----|----------------|
+| `screenscraper_id`, `thegamesdb_id` | Upstream API identifiers, not preferences |
+| `fullname`, `manufacturer`, `hardware_type`, `release_year` | Fixed facts about the console |
+| `extensions`, `aliases` | File recognition; a stale copy silently rejects new formats |
+
+Everything else (`default_emulator`, `steam_category`, `scan_as_dirs`,
+`legacy_tags`) is a genuine preference and the user wins. A user who needs
+different code-owned values adds their own system entry, which is preserved
+whole because it has no default to prune against.
+
+`save_config()` runs `prune_config()` first, so a config identical to the
+defaults saves as just `{"version": N}`.
+
+### System Definitions
+
+`systems.py` is a compatibility shim over the registry. Definitions are data,
+not code:
+
+| Field | Meaning |
+|-------|---------|
+| `fullname`, `manufacturer` | Display metadata |
+| `hardware_type`, `release_year` | Console facts |
+| `extensions` | Accepted ROM file extensions |
+| `screenscraper_id` | ScreenScraper `systemeid` ( = unscoped) |
+| `thegamesdb_id` | TheGamesDB platform ID |
+| `default_emulator` | Emulator ID used to build launch commands |
+| `steam_category` | Tag and collection name in Steam |
+| `legacy_tags` | Older tag strings still matched when replacing shortcuts |
+| `scan_as_dirs` | Folder-per-game systems such as PS Vita |
+| `aliases` | Alternate folder names that resolve here |
+
+**Adding a system** means adding an entry to `defaults/emulators.json`:
+
+```json
+"newsystem": {
+  "fullname": "New System",
+  "manufacturer": "Publisher",
+  "extensions": [".ext1", ".ext2"],
+  "screenscraper_id": 123,
+  "thegamesdb_id": "456",
+  "default_emulator": "retroarch/newsystem_core",
+  "steam_category": "New System"
+}
 ```
+
+Look `screenscraper_id` up in ScreenScraper's `systemesListe.php` and
+`thegamesdb_id` at thegamesdb.net/list_platforms.php. Never guess or enumerate:
+the original values were filled in sequentially, which produced collisions and
+made hash lookups fail with HTTP 404 because the ROM hash was being searched on
+the wrong console. `tests/test_screenscraper_ids.py` pins the verified values
+and rejects two systems sharing an ID.
+
+Use `` only when ScreenScraper genuinely has no matching platform. `arcade` is
+the one case: releases are catalogued per board (CPS1/2/3, Cave, Atomiswave)
+rather than under a single Arcade entry, so lookups run unscoped.
 
 ### ROM Scanner (`rom_scanner.py`)
+
+**Container selection.** One game often exists as several files that clean to
+the same title. The scanner keeps one entry per title and prefers the most
+complete container: `.chd` > `.cue`/`.gdi` > `.m3u` > `.iso` > `.bin`. A
+`.bin`/`.cue` pair resolves to the cue sheet, which carries the track layout the
+bare bin lacks. Later discs set `is_multi_disc` on the first entry instead of
+adding a shortcut.
 
 **Title cleaning pipeline:**
 1. Strip file extension (without using `Path.stem` which breaks on dots in parentheses)
@@ -382,6 +432,28 @@ CascadeScraper
 
 For each game, each art type is tried across providers until found. Missing types from one provider are filled by the next.
 
+**ScreenScraper lookup rules.** A `systemeid` mismatch is the difference between
+a hash hit and an HTTP 404: the hash is correct but searched on the wrong
+console. Two upstream behaviours need explicit handling:
+
+- A name search with no hits returns HTTP 2 with `"jeux": [{}]`, an empty object
+  rather than an empty list. Only an entry carrying a real `id` counts as a
+  match.
+- `get_artwork` with an empty id produces `jeuInfos.php?gameid=`, which can only
+  ever be a 400. Guarded in `ScreenScraper.get_artwork` and again in
+  `CascadeScraper._get_artwork`.
+
+**Never log credentials.** ScreenScraper authenticates with `devid`,
+`devpassword`, `ssid` and `sspassword` in the query string, and those values end
+up in `~/.local/share/sgm/sgm.log`. Pass every URL through `_redact_url()`
+before logging it; it masks the parameters named in `SECRET_PARAMS` while
+leaving `systemeid`, hashes and filenames visible for debugging.
+
+**Retry policy.** Only `_RETRYABLE_STATUSES` (429, 5xx, network failure) are
+retried with backoff. The curl fallback runs only for `_CURL_FALLBACK_STATUSES`
+(, 403), where urllib itself is the problem. Retrying a 44 against a rate-limited
+API just burns quota.
+
 ### Portable Bundle (`portable.py`)
 
 **Bundle structure:**
@@ -402,6 +474,29 @@ sgm_export_20260316_154500/
 - `merge`: Add missing images, keep existing (default)
 - `missing`: Only add art types that don't exist for an app ID
 - `replace`: Overwrite everything
+
+### Flatpak Permissions (`permissions.py`)
+
+Flatpak emulators are sandboxed and cannot reach ROM folders unless granted.
+Read-only is not sufficient: PCSX2 writes an ISO cache beside the disc image and
+will not boot when that write fails, which surfaces as a broken shortcut rather
+than a sandbox problem.
+
+| Function | Purpose |
+|----------|---------|
+| `installed_apps()` | App IDs installed for this user |
+| `effective_filesystems(app_id)` | Rules from `flatpak info --show-permissions` |
+| `covers_path_rw(entries, path)` | Whether the app can already read **and write** `path` |
+| `grant_path(app_id, path)` | Apply `flatpak override --user --filesystem=...` |
+| `configured_flatpak_apps(registry)` | App IDs backing the configured emulators |
+| `ensure_rom_access(apps, roots)` | Bulk entry point used by import and audit |
+
+`covers_path_rw` treats `home:ro` and `host:ro` as insufficient, resolves the
+target so a grant on a parent directory counts, and honours `!entry` negations.
+Grants are user-level, scoped to the exact folders named, and idempotent.
+
+`sgm rom import` calls this for the emulators it just used. `sgm rom
+permissions <folder> [--fix]` audits every configured emulator.
 
 ---
 
@@ -465,6 +560,7 @@ python3 -m py_compile systems.py
 python3 -m py_compile rom_scanner.py
 python3 -m py_compile shortcuts.py
 python3 -m py_compile art_scraper.py
+python3 -m py_compile permissions.py
 python3 -m py_compile portable.py
 
 # 2. Run unit tests
@@ -499,6 +595,11 @@ python3 sgm.py rom import /run/media/primary/Roms --system c64 --dry-run
 - `tests/test_art_scraper.py` - Art scraper cascade tests
 - `tests/test_portable.py` - Export/import bundle tests
 - `tests/test_systems.py` - System definitions validation tests
+- `tests/test_emulators_config.py` - Defaults/user-config merge, code-owned keys, sparse save
+- `tests/test_screenscraper_ids.py` - Platform ID correctness and uniqueness
+- `tests/test_art_scraper_requests.py` - URL redaction, retry policy, empty-match handling
+- `tests/test_rom_scanner_containers.py` - Container preference, bin/cue dedup, CHD discovery
+- `tests/test_permissions.py` - Flatpak coverage rules and grant behaviour
 
 **Test Requirements:**
 
@@ -680,6 +781,10 @@ def api_request(endpoint: str, api_key: str) -> dict:
 | Skip syntax check before commit | Catches errors early | Run `python3 -m py_compile` on all files |
 | Use `os.path` instead of `pathlib` | Inconsistent, less readable | Use `pathlib.Path` everywhere |
 | Print to stdout for logging | Mixes output with log messages | Use `logging` module, print only user-facing output |
+| Guess a platform ID | Sequential values collide and hash lookups 404 | Look it up upstream; tests reject duplicate IDs |
+| Log a URL without redacting | Writes API keys and passwords into the log file | Pass it through `_redact_url()` first |
+| Merge defaults into the user config | Freezes every value against future corrections | Keep the user file sparse; defaults own the definitions |
+| Assume a sandboxed emulator can write to a ROM folder | Game silently fails to launch | Grant read-write access on import; audit with `sgm rom permissions` |
 
 ---
 
