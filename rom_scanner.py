@@ -208,6 +208,34 @@ def clean_title(filename: str) -> str:
 # ROM Scanner
 # ═══════════════════════════════════════════════════════════════════════
 
+# When several files clean to the same title, keep the most complete container.
+# A CHD is lossless and self-contained; a cue sheet carries track layout that a
+# bare bin dump lacks; a bin alone is the least useful half of a pair.
+CONTAINER_RANK = {
+    ".chd": 6,
+    ".cue": 5,
+    ".gdi": 5,
+    ".m3u": 4,
+    ".iso": 3,
+    ".bin": 2,
+}
+
+
+def _container_rank(extension: str) -> int:
+    """Rank a ROM container so the best file for a game wins.
+
+    Args:
+        extension: File extension, with or without the leading dot.
+
+    Returns:
+        Higher ranks are preferred. Unknown extensions rank lowest.
+    """
+    ext = (extension or "").lower()
+    if ext and not ext.startswith("."):
+        ext = "." + ext
+    return CONTAINER_RANK.get(ext, 1)
+
+
 def scan_rom_folder(system_name: str, folder_path: Path,
                     system_def: Optional[SystemDef] = None) -> List[RomEntry]:
     """Scan a single system ROM folder for valid ROM files.
@@ -245,7 +273,7 @@ def scan_rom_folder(system_name: str, folder_path: Path,
         return []
 
     roms: List[RomEntry] = []
-    seen_titles: Dict[str, RomEntry] = {}
+    seen_titles: Dict[str, Tuple[RomEntry, int]] = {}
 
     def _scan_path(path: Path, is_dir_rom: bool = False) -> None:
         """Recursively scan a file or directory for ROMs."""
@@ -266,7 +294,13 @@ def scan_rom_folder(system_name: str, folder_path: Path,
             _process_file(path)
 
     def _process_file(item: Path) -> None:
-        """Process a single ROM file."""
+        """Process a single ROM file, keeping one entry per game.
+
+        A disc-based game often ships as several files that clean to the same
+        title: a ``.bin``/``.cue`` pair, or extra discs. Only one shortcut per
+        game is wanted, so duplicates resolve by container quality and later
+        discs simply flag the first entry as multi-disc.
+        """
         if not system_def.is_rom_file(item.name):
             return
 
@@ -274,16 +308,31 @@ def scan_rom_folder(system_name: str, folder_path: Path,
         if rom is None:
             return
 
-        base_title = rom.clean_title
-        if base_title in seen_titles:
-            existing = seen_titles[base_title]
-            if rom.disc_number and rom.disc_number > 1:
-                existing.is_multi_disc = True
-                return
-        else:
-            seen_titles[base_title] = rom
+        known = seen_titles.get(rom.clean_title)
+        if known is None:
+            seen_titles[rom.clean_title] = (rom, len(roms))
+            roms.append(rom)
+            return
 
-        roms.append(rom)
+        existing, position = known
+
+        if rom.disc_number and rom.disc_number > 1:
+            # Another disc of a set already represented by the first one.
+            existing.is_multi_disc = True
+            return
+
+        if _container_rank(rom.extension) <= _container_rank(existing.extension):
+            logger.debug(f"Skipping {rom.filename}: {existing.filename} already "
+                         f"represents {rom.clean_title}")
+            return
+
+        # Better container for the same game, so swap it in rather than adding
+        # a second shortcut that launches the same title.
+        logger.debug(f"Preferring {rom.filename} over {existing.filename} "
+                     f"for {rom.clean_title}")
+        rom.is_multi_disc = existing.is_multi_disc
+        roms[position] = rom
+        seen_titles[rom.clean_title] = (rom, position)
 
     # Scan all items in folder (files and directories)
     for item in sorted(folder_path.iterdir()):
