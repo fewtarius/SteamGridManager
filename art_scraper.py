@@ -338,6 +338,80 @@ class GameMatch:
 # HTTP Helpers
 # ═══════════════════════════════════════════════════════════════════════
 
+# Query parameters that carry credentials. Their values are masked before a URL
+# reaches the log, which is world-readable in ~/.local/share/sgm/sgm.log.
+SECRET_PARAMS = frozenset({
+    "devid", "devpassword", "ssid", "sspassword", "apikey", "api_key",
+    "key", "token", "password", "user",
+})
+
+# urllib itself is the likely problem for these, so a curl retry is worthwhile.
+_CURL_FALLBACK_STATUSES = frozenset({0, 403})
+
+# Transient failures worth retrying with backoff. Everything else is permanent:
+# re-requesting a 404 only burns quota against a rate-limited API.
+_RETRYABLE_STATUSES = frozenset({0, 429, 500, 502, 503, 504})
+
+
+def _redact_url(url: str) -> str:
+    """Mask credential values in a URL so it is safe to write to the log.
+
+    Args:
+        url: Request URL, possibly carrying credentials in the query string.
+
+    Returns:
+        The URL with every value in :data:`SECRET_PARAMS` replaced by ``***``.
+    """
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        return "<unparseable url>"
+
+    if not parts.query:
+        return url
+
+    kept = []
+    for pair in parts.query.split("&"):
+        name, sep, value = pair.partition("=")
+        if name.lower() in SECRET_PARAMS and value:
+            value = "***"
+        kept.append(name + sep + value)
+
+    return urllib.parse.urlunsplit(parts._replace(query="&".join(kept)))
+
+
+def _curl_get_json(url: str, headers: Optional[Dict[str, str]],
+                   timeout: int) -> Optional[dict]:
+    """Fetch JSON through curl, for when urllib is rejected upstream.
+
+    Args:
+        url: URL to fetch.
+        headers: Optional extra request headers.
+        timeout: Command timeout in seconds.
+
+    Returns:
+        Parsed JSON body, or None if curl failed or returned nothing usable.
+    """
+    import subprocess
+
+    cmd = ["curl", "-s", "-L", "-A", "SGM/1.0"]
+    if headers:
+        for k, v in headers.items():
+            cmd += ["-H", f"{k}: {v}"]
+    cmd.append(url)
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        if result.returncode == 0 and result.stdout:
+            return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    except Exception:
+        return None
+
+    return None
+
+
 def _http_get(url: str, headers: Optional[Dict[str, str]] = None,
               timeout: int = 30) -> Tuple[bytes, int, Dict[str, str]]:
     """Simple HTTP GET request using urllib (no external deps).
@@ -365,10 +439,10 @@ def _http_get(url: str, headers: Optional[Dict[str, str]] = None,
     except urllib.error.HTTPError as e:
         return e.read() if e.fp else b"", e.code, {}
     except urllib.error.URLError as e:
-        logger.error(f"HTTP request failed: {url} - {e}")
+        logger.error(f"HTTP request failed: {_redact_url(url)} - {e}")
         return b"", 0, {}
     except Exception as e:
-        logger.error(f"HTTP request error: {url} - {e}")
+        logger.error(f"HTTP request error: {_redact_url(url)} - {e}")
         return b"", 0, {}
 
 
@@ -376,14 +450,17 @@ def _http_get_json(url: str, headers: Optional[Dict[str, str]] = None,
                    timeout: int = 30, retries: int = 3) -> Optional[dict]:
     """HTTP GET returning parsed JSON, with retry/backoff for transient errors.
 
-    Tries urllib first; if the status is not 200 (e.g. 403), falls back to a
-    curl subprocess for that attempt. Retries retryable statuses (rate limits
-    and server errors, plus network failures) with exponential backoff so
-    temporary throttling never silently drops a result.
+    Tries urllib first, then curl when the status suggests urllib itself is
+    being rejected. Only transient statuses are retried, with exponential
+    backoff. Permanent client errors return immediately: re-requesting a 404
+    just burns quota against a rate-limited API.
     """
-    import subprocess
+    safe_url = _redact_url(url)
     last_status = 0
+    attempts = 1
+
     for attempt in range(retries):
+        attempts = attempt + 1
         body, status, _ = _http_get(url, headers, timeout)
         last_status = status
 
@@ -391,35 +468,26 @@ def _http_get_json(url: str, headers: Optional[Dict[str, str]] = None,
             try:
                 return json.loads(body)
             except json.JSONDecodeError as e:
-                logger.debug(f"JSON decode error from {url}: {e}")
+                logger.debug(f"JSON decode error from {safe_url}: {e}")
                 return None  # 200 with an unparseable body is not transient
 
-        # Non-200: fall back to curl (urllib's UA may be blocked upstream).
-        logger.debug(f"urllib HTTP {status} from {url}, trying curl")
-        cmd = ['curl', '-s', '-L', '-A', 'SGM/1.0']
-        if headers:
-            for k, v in headers.items():
-                cmd += ['-H', f'{k}: {v}']
-        cmd.append(url)
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-            if result.returncode == 0 and result.stdout:
-                try:
-                    return json.loads(result.stdout)
-                except json.JSONDecodeError as e:
-                    logger.debug(f"curl JSON decode error from {url}: {e}")
-        except Exception as e:
-            logger.debug(f"curl fallback failed for {url}: {e}")
+        if status in _CURL_FALLBACK_STATUSES:
+            logger.debug(f"urllib HTTP {status} from {safe_url}, trying curl")
+            parsed = _curl_get_json(url, headers, timeout)
+            if parsed is not None:
+                return parsed
+        else:
+            logger.debug(f"HTTP {status} from {safe_url}, no curl fallback")
 
-        # Retry only transient failures; abort immediately on permanent errors.
-        if status in (429, 500, 502, 503, 504, 0) and attempt < retries - 1:
+        if status in _RETRYABLE_STATUSES and attempt < retries - 1:
             wait = 2 ** attempt  # 1s, 2s, 4s
-            logger.info(f"Retryable status {status} from {url}, retrying in {wait}s (attempt {attempt + 2}/{retries})")
+            logger.info(f"Retryable status {status} from {safe_url}, retrying "
+                        f"in {wait}s (attempt {attempt + 2}/{retries})")
             time.sleep(wait)
         else:
             break
 
-    logger.warning(f"HTTP {last_status} from {url} after {retries} attempts")
+    logger.warning(f"HTTP {last_status} from {safe_url} after {attempts} attempts")
     return None
 
 
@@ -555,15 +623,18 @@ class ScreenScraperProvider:
         data = _http_get_json(url)
 
         if data and "response" in data and "jeu" in data.get("response", {}):
-            jeu = data["response"]["jeu"]
-            game_title = self._extract_name(jeu.get("noms", []))
-            return GameMatch(
-                game_id=str(jeu.get("id", "")),
-                title=game_title or title,
-                provider=self.name,
-                platform=str(screenscraper_id or ""),
-                confidence=1.0 if hashes else 0.9,
-            )
+            jeu = data["response"]["jeu"] or {}
+            matched_id = str(jeu.get("id") or "").strip()
+            if matched_id:
+                game_title = self._extract_name(jeu.get("noms", []))
+                return GameMatch(
+                    game_id=matched_id,
+                    title=game_title or title,
+                    provider=self.name,
+                    platform=str(screenscraper_id or ""),
+                    confidence=1.0 if hashes else 0.9,
+                )
+            logger.debug(f"ScreenScraper answered for {title!r} without a game id")
 
         # --- Title search fallback ---
         return self._search_by_name(title, screenscraper_id)
@@ -585,15 +656,33 @@ class ScreenScraperProvider:
 
         response = data["response"]
         jeux = response.get("jeux", [])
-        if not jeux:
+
+        # A search with no hits comes back as HTTP 200 with "jeux": [{}], an
+        # empty object rather than an empty list. Only an entry carrying a real
+        # id counts as a match; anything else must not reach get_artwork.
+        candidate = next(
+            (j for j in jeux if isinstance(j, dict) and str(j.get("id") or "").strip()),
+            None,
+        )
+        if candidate is None:
+            logger.debug(f"ScreenScraper found no match for {title!r}")
             return None
 
-        # Take best match (first result)
-        jeu = jeux[0]
-        game_title = self._extract_name(jeu.get("noms", []))
+        # When a platform was requested, refuse results from another one so a
+        # same-titled game cannot attach the wrong box art.
+        if screenscraper_id:
+            returned = (candidate.get("systeme") or {}).get("id")
+            if returned and str(returned) != str(screenscraper_id):
+                logger.debug(
+                    f"ScreenScraper returned {title!r} on platform {returned}, "
+                    f"expected {screenscraper_id}"
+                )
+                return None
+
+        game_title = self._extract_name(candidate.get("noms", []))
 
         return GameMatch(
-            game_id=str(jeu.get("id", "")),
+            game_id=str(candidate["id"]),
             title=game_title or title,
             provider=self.name,
             platform=str(screenscraper_id or ""),
@@ -609,8 +698,14 @@ class ScreenScraperProvider:
             screenscraper_id: Platform ID.
 
         Returns:
-            Dict mapping art_type to ArtResult.
+            Dict mapping art_type to ArtResult. Empty if the id is missing or
+            no artwork exists.
         """
+        if not str(game_id or "").strip():
+            # Without an id this request can only ever be a 400.
+            logger.debug("ScreenScraper artwork requested without a game id")
+            return {}
+
         self._rate_limit()
 
         params = {"gameid": game_id}
@@ -1210,6 +1305,9 @@ class CascadeScraper:
                      ss_id: Optional[int] = None,
                      wanted_types: Optional[Set[str]] = None) -> Dict[str, ArtResult]:
         """Get artwork from a specific provider."""
+        if not str(game_id or "").strip():
+            logger.debug(f"Skipping {getattr(provider, 'name', 'provider')}: no game id")
+            return {}
         if isinstance(provider, ScreenScraperProvider):
             return provider.get_artwork(game_id, ss_id)
         elif isinstance(provider, TheGamesDBProvider):
