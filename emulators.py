@@ -44,6 +44,141 @@ def _find_default_config() -> Path:
 
 DEFAULT_CONFIG = _find_default_config()
 
+# Keys describing upstream services, fixed hardware facts, or how a system's
+# files are recognised. These always come from defaults/emulators.json and are
+# never read from or written to the user's config, so a stale copy cannot
+# outlive a correction to the shipped defaults. Users who need different values
+# add their own system entry, which is preserved whole.
+CODE_OWNED_SYSTEM_KEYS = frozenset({
+    "screenscraper_id",
+    "thegamesdb_id",
+    "fullname",
+    "manufacturer",
+    "hardware_type",
+    "release_year",
+    "extensions",
+    "aliases",
+})
+
+# Config sections whose entries are dictionaries keyed by id.
+MERGED_SECTIONS = ("emulators", "retroarch_cores", "systems")
+
+_MISSING = object()
+
+
+def _merge_layer(defaults: Dict, user: Dict, section: str) -> Dict:
+    """Merge a user layer over a defaults layer.
+
+    Entries present only in the user layer are preserved so custom emulators
+    and systems survive. Within an entry shared by both layers the user wins,
+    except for code-owned keys, which always come from defaults.
+
+    Args:
+        defaults: Entries from the shipped default config.
+        user: Entries from the user's config.
+        section: Section name, used to apply code-owned key policy.
+
+    Returns:
+        New dictionary with the merged entries.
+    """
+    merged: Dict = {}
+
+    for key, default_entry in defaults.items():
+        user_entry = user.get(key, _MISSING)
+        if user_entry is _MISSING:
+            merged[key] = default_entry
+        elif isinstance(default_entry, dict) and isinstance(user_entry, dict):
+            combined = dict(default_entry)
+            combined.update(user_entry)
+            if section == "systems":
+                for owned in CODE_OWNED_SYSTEM_KEYS:
+                    if owned in default_entry:
+                        combined[owned] = default_entry[owned]
+                    else:
+                        combined.pop(owned, None)
+            merged[key] = combined
+        else:
+            merged[key] = user_entry
+
+    for key, user_entry in user.items():
+        if key not in defaults:
+            merged[key] = user_entry
+
+    return merged
+
+
+def _prune_layer(defaults: Dict, merged: Dict, section: str) -> Dict:
+    """Reduce a merged layer down to what actually differs from defaults.
+
+    Entries identical to their default are omitted entirely, and entries that
+    differ keep only the differing keys. Code-owned keys are never persisted.
+
+    Args:
+        defaults: Entries from the shipped default config.
+        merged: Entries currently held in the registry.
+        section: Section name, used to apply code-owned key policy.
+
+    Returns:
+        Sparse dictionary containing only user customizations.
+    """
+    sparse: Dict = {}
+
+    for key, value in merged.items():
+        default_entry = defaults.get(key, _MISSING)
+
+        if default_entry is _MISSING:
+            # User-defined entry with no default: keep it whole.
+            sparse[key] = value
+            continue
+
+        if isinstance(default_entry, dict) and isinstance(value, dict):
+            diff = {}
+            for sub_key, sub_value in value.items():
+                if section == "systems" and sub_key in CODE_OWNED_SYSTEM_KEYS:
+                    continue
+                if default_entry.get(sub_key, _MISSING) != sub_value:
+                    diff[sub_key] = sub_value
+            if diff:
+                sparse[key] = diff
+        elif value != default_entry:
+            sparse[key] = value
+
+    return sparse
+
+
+def prune_config(defaults: Dict, config: Dict) -> Dict:
+    """Strip everything from a config that the defaults already provide.
+
+    Args:
+        defaults: Parsed defaults/emulators.json.
+        config: Parsed merged or user config.
+
+    Returns:
+        Minimal config holding only the user's own customizations.
+    """
+    pruned: Dict = {}
+
+    if "version" in config:
+        pruned["version"] = config["version"]
+
+    comment = config.get("_comment")
+    if comment is not None and comment != defaults.get("_comment"):
+        pruned["_comment"] = comment
+
+    for section in MERGED_SECTIONS:
+        sparse = _prune_layer(defaults.get(section, {}),
+                              config.get(section, {}), section)
+        if sparse:
+            pruned[section] = sparse
+
+    carried = set(MERGED_SECTIONS) | {"version", "_comment"}
+    for key, value in config.items():
+        if key not in carried:
+            pruned[key] = value
+
+    return pruned
+
+
 # Flatpak IDs for known emulators
 FLATPAK_IDS = {
     "retroarch": "org.libretro.RetroArch",
@@ -564,14 +699,14 @@ class EmulatorRegistry:
     def _load_and_merge_configs(self) -> Dict:
         """Load defaults and user config, deep-merging them together.
 
-        Defaults provide the base. User config overrides on top.
-        Sections merged: emulators, retroarch_cores, systems.
-        If the merge added anything new, writes merged config back.
+        Defaults provide the base and the user's config overrides on top,
+        except for code-owned keys, which always come from defaults. Entries
+        the user added themselves are preserved.
 
-        Returns:
-            The merged configuration dictionary.
+        The merged result is kept in memory only. Writing it back would expand
+        the user's config into a full copy of the defaults, which pins every
+        value against future corrections.
         """
-        # Load defaults
         if not DEFAULT_CONFIG.exists():
             logger.warning(f"Default emulators config not found: {DEFAULT_CONFIG}")
             return {}
@@ -584,18 +719,10 @@ class EmulatorRegistry:
             logger.error(f"Failed to load default config: {e}")
             return {}
 
-        # If no user config exists, write defaults as-is and return
+        # No user config means no customizations; defaults stand alone.
         if not EMULATORS_CONFIG.exists():
-            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            try:
-                with open(EMULATORS_CONFIG, 'w', encoding='utf-8') as f:
-                    json.dump(defaults, f, indent=2)
-                logger.info(f"Wrote default emulators.json to {EMULATORS_CONFIG}")
-            except Exception as e:
-                logger.error(f"Failed to write config: {e}")
             return defaults
 
-        # Load user config
         try:
             with open(EMULATORS_CONFIG, 'r', encoding='utf-8') as f:
                 user_config = json.load(f)
@@ -607,50 +734,17 @@ class EmulatorRegistry:
             logger.error(f"Failed to load user config: {e}")
             return defaults
 
-        # Deep merge: defaults -> base, user -> overlay
         merged = dict(defaults)
-        changed = False
+        merged["version"] = user_config.get("version", defaults.get("version", 1))
+        if "_comment" in user_config:
+            merged["_comment"] = user_config["_comment"]
 
-        for section in ("emulators", "retroarch_cores", "systems"):
-            default_section = defaults.get(section, {})
-            user_section = user_config.get(section, {})
-
-            if not user_section:
-                continue
-
-            # Start with all default entries
-            merged_section = dict(default_section)
-            # Overlay user entries (user wins for same key)
-            for key, value in user_section.items():
-                if key in default_section:
-                    # User has customization - use theirs
-                    merged_section[key] = value
-                else:
-                    # User-only entry - preserve it (maybe they added custom system)
-                    merged_section[key] = value
-
-            merged[section] = merged_section
-
-            # Detect if defaults added new entries the user didn't have
-            new_keys = set(default_section.keys()) - set(user_section.keys())
-            if new_keys:
-                logger.info(f"Added {len(new_keys)} new {section} from defaults: "
-                           f"{', '.join(sorted(new_keys))}")
-                changed = True
-
-        # Write back merged config so next load is fast
-        if changed:
-            try:
-                # Preserve user's version if they have one, else use defaults version
-                merged["version"] = user_config.get("version", defaults.get("version", 1))
-                # Preserve user comments
-                if "_comment" in user_config:
-                    merged["_comment"] = user_config["_comment"]
-                with open(EMULATORS_CONFIG, 'w', encoding='utf-8') as f:
-                    json.dump(merged, f, indent=2)
-                logger.info(f"Wrote merged emulators.json to {EMULATORS_CONFIG}")
-            except Exception as e:
-                logger.warning(f"Failed to write merged config: {e} (continuing anyway)")
+        for section in MERGED_SECTIONS:
+            merged[section] = _merge_layer(
+                defaults.get(section, {}),
+                user_config.get(section, {}),
+                section,
+            )
 
         return merged
 
@@ -779,12 +873,37 @@ class EmulatorRegistry:
         """List all RetroArch core plugins."""
         return self._retroarch_cores.copy()
 
+    def sparse_config(self) -> Dict:
+        """Return the current config reduced to what differs from defaults.
+
+        Returns:
+            Minimal config containing only user customizations. If the
+            defaults cannot be read, the full config is returned unchanged.
+        """
+        if not DEFAULT_CONFIG.exists():
+            logger.warning(f"Cannot prune config, defaults missing: {DEFAULT_CONFIG}")
+            return self._config
+
+        try:
+            with open(DEFAULT_CONFIG, 'r', encoding='utf-8') as f:
+                defaults = json.load(f)
+        except Exception as e:
+            logger.warning(f"Cannot prune config, defaults unreadable: {e}")
+            return self._config
+
+        return prune_config(defaults, self._config)
+
     def save_config(self) -> None:
-        """Save current configuration to emulators.json."""
+        """Persist only the user's own customizations to emulators.json.
+
+        Anything the shipped defaults already provide is stripped, so the file
+        stays small and corrections to defaults keep taking effect.
+        """
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
         with open(EMULATORS_CONFIG, 'w', encoding='utf-8') as f:
-            json.dump(self._config, f, indent=2)
+            json.dump(self.sparse_config(), f, indent=2)
+            f.write("\n")
 
         logger.info(f"Saved emulators config to {EMULATORS_CONFIG}")
 
@@ -963,10 +1082,14 @@ def emulators_config_exists() -> bool:
 
 
 def init_config() -> bool:
-    """Initialize emulators.json from defaults.
+    """Create a minimal emulators.json for user customizations.
+
+    Definitions come from the shipped defaults, so the user file only needs to
+    hold overrides. Writing a stub keeps it that way instead of freezing a
+    copy of every default in place.
 
     Returns:
-        True if config was created, False if already exists.
+        True if the config was created, False if it already exists.
     """
     if EMULATORS_CONFIG.exists():
         return False
@@ -975,10 +1098,19 @@ def init_config() -> bool:
         logger.error(f"Default config not found: {DEFAULT_CONFIG}")
         return False
 
+    try:
+        with open(DEFAULT_CONFIG, 'r', encoding='utf-8') as f:
+            version = json.load(f).get("version", 1)
+    except Exception as e:
+        logger.error(f"Failed to read defaults: {e}")
+        return False
+
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        shutil.copy2(DEFAULT_CONFIG, EMULATORS_CONFIG)
-        logger.info(f"Created emulators.json from defaults at {EMULATORS_CONFIG}")
+        with open(EMULATORS_CONFIG, 'w', encoding='utf-8') as f:
+            json.dump({"version": version}, f, indent=2)
+            f.write("\n")
+        logger.info(f"Created emulators.json at {EMULATORS_CONFIG}")
         reset_registry()
         return True
     except Exception as e:
@@ -996,15 +1128,28 @@ def load_config() -> Dict:
 
 
 def save_config(config: Dict) -> None:
-    """Save configuration to emulators.json.
+    """Save user customizations to emulators.json.
+
+    Values the shipped defaults already provide are stripped before writing,
+    so the file holds only what the user actually changed.
 
     Args:
-        config: Configuration dictionary to save.
+        config: Configuration dictionary to prune and save.
     """
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
+    payload = config
+    if DEFAULT_CONFIG.exists():
+        try:
+            with open(DEFAULT_CONFIG, 'r', encoding='utf-8') as f:
+                defaults = json.load(f)
+            payload = prune_config(defaults, config)
+        except Exception as e:
+            logger.warning(f"Cannot prune config, defaults unreadable: {e}")
+
     with open(EMULATORS_CONFIG, 'w', encoding='utf-8') as f:
-        json.dump(config, f, indent=2)
+        json.dump(payload, f, indent=2)
+        f.write("\n")
 
     logger.info(f"Saved emulators config to {EMULATORS_CONFIG}")
     reset_registry()
