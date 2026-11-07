@@ -361,14 +361,15 @@ rather than under a single Arcade entry, so lookups run unscoped.
 
 **Container selection.** One game often exists as several files that clean to
 the same title. The scanner keeps one entry per title and prefers the most
-complete container: `.chd` > `.cue`/`.gdi` > `.m3u` > `.iso` > `.bin`. A
-`.bin`/`.cue` pair resolves to the cue sheet, which carries the track layout the
-bare bin lacks. Later discs set `is_multi_disc` on the first entry instead of
-adding a shortcut.
+complete container: `.chd` over `.iso` over `.bin`. A `.bin`/`.cue` pair is one
+game, not two, and the raw data file wins over its CUE wrapper because some
+emulators (notably the PCSX2 flatpak) cannot parse CUE sheets. Later discs set
+`is_multi_disc` on the first entry instead of adding a shortcut.
 
-CUE sheets are normalized to LF during import. PCSX2's CUE parser splits on
-`\n` only and does not strip carriage returns, so a CRLF sheet makes the `FILE`
-token resolve to `game.bin\r` and the binary cannot be found.
+CUE sheets are still normalized to LF during import, in case a CUE is the only
+file present. PCSX2's CUE parser splits on `\n` only and does not strip carriage
+returns, so a CRLF sheet makes its `FILE` token resolve to `game.bin\r` and the
+binary cannot be found.
 `normalize_cue_file` rewrites the sheet losslessly and is idempotent.
 
 **Title cleaning pipeline:**

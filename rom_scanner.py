@@ -209,15 +209,17 @@ def clean_title(filename: str) -> str:
 # ═══════════════════════════════════════════════════════════════════════
 
 # When several files clean to the same title, keep the most complete container.
-# A CHD is lossless and self-contained; a cue sheet carries track layout that a
-# bare bin dump lacks; a bin alone is the least useful half of a pair.
+# CHD is lossless and self-contained, so it wins. ISO and BIN are raw dumps
+# that any emulator opens directly. CUE/GDI/M3U are metadata wrappers that
+# point at a companion data file: some emulators (notably the PCSX2 flatpak)
+# cannot parse them, so the raw data file is preferred over its wrapper.
 CONTAINER_RANK = {
-    ".chd": 6,
-    ".cue": 5,
-    ".gdi": 5,
-    ".m3u": 4,
-    ".iso": 3,
-    ".bin": 2,
+    ".chd": 7,
+    ".iso": 6,
+    ".bin": 5,
+    ".gdi": 3,
+    ".cue": 2,
+    ".m3u": 1,
 }
 
 

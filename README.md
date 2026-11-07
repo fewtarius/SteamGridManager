@@ -241,14 +241,14 @@ Import does the following:
 Restart Steam after importing to see the new entries.
 
 Where a game exists as several files, import keeps one shortcut and picks the
-best container: `.chd` over `.cue` over `.iso` over `.bin`. A `.bin`/`.cue` pair
-is one game, not two, and the cue sheet wins because it carries the track
-layout. Extra discs fold into the first entry rather than adding duplicates.
+best container: `.chd` over `.iso` over `.bin`. A `.bin`/`.cue` pair is one
+game, not two, and the raw data file wins over its CUE wrapper because some
+emulators (notably the PCSX2 flatpak) cannot parse CUE sheets. Extra discs fold
+into the first entry rather than adding duplicates.
 
-CUE sheets are normalized to LF line endings during import. PCSX2's CUE parser
-does not handle CRLF, so a sheet whose `FILE` token carries a trailing `\r`
-makes the referenced binary unfindable and the game fails to boot with "Unable
-to identify the ISO image type". The rewrite is lossless and idempotent.
+CUE sheets are still normalized to LF if they are the only file present. PCSX2's
+CUE parser splits on `\n` only, so a CRLF sheet makes its `FILE` token resolve
+to `game.bin\r` and the binary cannot be found.
 
 ### Flatpak Permissions
 

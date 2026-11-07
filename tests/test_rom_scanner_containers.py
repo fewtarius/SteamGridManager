@@ -36,8 +36,12 @@ class TestContainerRank:
     def test_chd_beats_everything(self):
         assert R._container_rank(".chd") > R._container_rank(".cue")
 
-    def test_cue_beats_bin(self):
-        assert R._container_rank(".cue") > R._container_rank(".bin")
+    def test_iso_beats_bin(self):
+        assert R._container_rank(".iso") > R._container_rank(".bin")
+
+    def test_bin_beats_cue(self):
+        """Raw data files are preferred over their CUE metadata wrapper."""
+        assert R._container_rank(".bin") > R._container_rank(".cue")
 
     def test_case_insensitive(self):
         assert R._container_rank(".CUE") == R._container_rank(".cue")
@@ -51,7 +55,7 @@ class TestContainerRank:
 
 
 class TestBinCuePair:
-    """A bin/cue pair is one game, and the cue sheet is the right half."""
+    """A bin/cue pair is one game, and the raw data wins over the wrapper."""
 
     def test_single_entry(self, ps2_folder):
         folder = ps2_folder("Gauntlet - Dark Legacy (USA).bin",
@@ -59,29 +63,30 @@ class TestBinCuePair:
         roms = R.scan_rom_folder("ps2", folder)
         assert len(roms) == 1
 
-    def test_cue_is_chosen(self, ps2_folder):
+    def test_bin_is_chosen(self, ps2_folder):
+        """The .bin is preferred: some emulators (PCSX2 flatpak) can't parse CUE."""
         folder = ps2_folder("Gauntlet - Dark Legacy (USA).bin",
                             "Gauntlet - Dark Legacy (USA).cue")
         roms = R.scan_rom_folder("ps2", folder)
-        assert roms[0].filename.endswith(".cue")
+        assert roms[0].filename.endswith(".bin")
 
-    def test_cue_wins_when_seen_second(self, ps2_folder):
+    def test_bin_wins_when_seen_second(self, ps2_folder):
         """Order independence: the better container wins however it arrives."""
         folder = ps2_folder("Zeta (USA).iso", "Zeta (USA).cue")
         roms = R.scan_rom_folder("ps2", folder)
         assert len(roms) == 1
-        assert roms[0].filename.endswith(".cue")
+        assert roms[0].filename.endswith(".iso")
 
     def test_worse_container_does_not_replace(self, ps2_folder):
         folder = ps2_folder("Alpha (USA).cue", "Alpha (USA).bin")
         roms = R.scan_rom_folder("ps2", folder)
-        assert roms[0].filename.endswith(".cue")
+        assert roms[0].filename.endswith(".bin")
 
     def test_uppercase_extensions_match(self, ps2_folder):
         folder = ps2_folder("Star Trek Conquest.CUE", "Star Trek Conquest.ISO")
         roms = R.scan_rom_folder("ps2", folder)
         assert len(roms) == 1
-        assert roms[0].filename.endswith(".CUE")
+        assert roms[0].filename.endswith(".ISO")
 
 
 class TestMultiDisc:
@@ -102,7 +107,7 @@ class TestMultiDisc:
         roms = R.scan_rom_folder("ps2", folder)
         assert len(roms) == 1
         assert roms[0].is_multi_disc is True
-        assert roms[0].filename.endswith("Disc 1).cue")
+        assert roms[0].filename.endswith("Disc 1).bin")
 
     def test_upgrade_keeps_multi_flag(self, ps2_folder):
         """A better container arriving late must not lose the disc flag."""
@@ -154,6 +159,6 @@ class TestDistinctGamesUnaffected:
         roms = R.scan_rom_folder("ps2", folder)
         chosen = titles(roms)
         assert len(roms) == 3
-        assert chosen["A"].endswith(".cue")
+        assert chosen["A"].endswith(".bin")
         assert chosen["B"].endswith(".iso")
         assert chosen["C"].endswith(".chd")
