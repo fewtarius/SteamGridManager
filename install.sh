@@ -48,6 +48,7 @@ SGM_FILES=(
     heroic.py
     emulators.py
     reconcile.py
+    permissions.py
 )
 
 echo ""

@@ -1441,6 +1441,146 @@ def cmd_rom_remove(args: argparse.Namespace) -> int:
     return 0
 
 
+def _flatpak_apps_for_systems(system_ids) -> list:
+    """Collect the flatpak application IDs backing a set of systems.
+
+    Args:
+        system_ids: System identifiers that will be launched.
+
+    Returns:
+        Ordered unique list of flatpak application IDs.
+    """
+    from systems import get_system as _get_system
+
+    apps = []
+    for system_id in system_ids:
+        sys_def = _get_system(system_id)
+        plugin = getattr(sys_def, "emulator", None) if sys_def else None
+        app_id = getattr(plugin, "flatpak_id", None) if plugin else None
+        if app_id and app_id not in apps:
+            apps.append(app_id)
+    return apps
+
+
+def _report_flatpak_permissions(apps: list, root: Path, dry_run: bool = False) -> None:
+    """Give flatpak emulators read-write access to a ROM folder.
+
+    Sandboxed emulators cannot write beside the ROM unless granted, and several
+    need to: PCSX2 keeps an ISO cache next to the disc image and refuses to boot
+    when that write fails, which looks like a broken shortcut rather than a
+    sandbox restriction.
+
+    Args:
+        apps: Flatpak application IDs that need access.
+        root: ROM folder to expose.
+        dry_run: Report what would change without touching flatpak.
+    """
+    if not apps:
+        return
+
+    from permissions import (
+        ensure_rom_access, GRANTED, WOULD_GRANT, FAILED,
+    )
+
+    grants = ensure_rom_access(apps, [Path(root)], dry_run=dry_run)
+
+    if dry_run:
+        pending = [g for g in grants if g.action == WOULD_GRANT]
+        if pending:
+            print("\nFlatpak access needed for these emulators:")
+            for g in pending:
+                print(f"  {g.app_id}: {g.detail}")
+        return
+
+    changed = [g for g in grants if g.action == GRANTED]
+    if changed:
+        print("\nGranted flatpak emulators access to ROMs:")
+        for g in changed:
+            print(f"  {g.app_id} -> {g.path}")
+
+    failed = [g for g in grants if g.action == FAILED]
+    if failed:
+        print(f"\nCould not grant flatpak access for {len(failed)} emulator(s). "
+              "Games may not launch:")
+        for g in failed:
+            print(f"  {g.app_id}: {g.detail}")
+            print(f"    flatpak override --user --filesystem={g.path} {g.app_id}")
+
+
+def cmd_rom_permissions(args: argparse.Namespace) -> int:
+    """Audit flatpak filesystem access for every configured emulator.
+
+    Sandboxed emulators silently fail to launch games when they cannot reach
+    the ROM folder, and read-only access is not enough for emulators that write
+    sidecar files beside the disc image. This lists each emulator's status and,
+    with --fix, grants what is missing.
+    """
+    from emulators import get_registry
+    from permissions import (
+        configured_flatpak_apps, ensure_rom_access, installed_apps,
+        GRANTED, WOULD_GRANT, FAILED,
+    )
+
+    GREEN = "\033[32m"; YELLOW = "\033[33m"; RED = "\033[31m"; RESET = "\033[0m"
+
+    roots = [Path(p).expanduser() for p in args.paths]
+
+    missing = [r for r in roots if not r.is_dir()]
+    if missing:
+        for root in missing:
+            print(f"{RED}Not a directory: {root}{RESET}")
+        return 1
+
+    registry = get_registry()
+    apps = configured_flatpak_apps(registry)
+    known = installed_apps()
+    present = {a: n for a, n in apps.items() if a in known}
+
+    print(f"\nAuditing {len(roots)} ROM folder(s) against "
+          f"{len(present)} installed emulator(s) "
+          f"({len(apps) - len(present)} configured but not installed)\n")
+
+    if not present:
+        print("No configured emulator is a flatpak app, or none are installed.")
+        return 0
+
+    grants = ensure_rom_access(list(present), roots, dry_run=not args.fix)
+
+    needs_fix = False
+    for app_id, name in sorted(present.items(), key=lambda kv: kv[1]):
+        mine = [g for g in grants if g.app_id == app_id]
+        pending = [g for g in mine if g.action in (WOULD_GRANT, GRANTED)]
+        failed = [g for g in mine if g.action == FAILED]
+
+        if not pending and not failed:
+            print(f"  {GREEN}ok{RESET}    {name:<20} {app_id}")
+            continue
+
+        needs_fix = True
+        if failed:
+            print(f"  {RED}failed{RESET} {name:<20} {app_id}")
+        elif args.fix:
+            print(f"  {GREEN}fixed{RESET} {name:<20} {app_id}")
+        else:
+            print(f"  {YELLOW}needs{RESET} {name:<20} {app_id}")
+
+        for g in pending + failed:
+            note = "" if g.action != FAILED else f"  ({g.detail})"
+            print(f"          {g.path}{note}")
+
+    if args.fix:
+        if needs_fix:
+            print("\nRestart any running emulator for the new permissions to apply.")
+        else:
+            print("\nNothing to change; every emulator can already read and write "
+                  "the given folders.")
+    elif needs_fix:
+        print("\nRun with --fix to grant the missing access, or import ROMs and "
+              "SGM will set it automatically.")
+
+    return 0
+
+
 def cmd_rom(args: argparse.Namespace) -> int:
     """ROM management commands."""
     from config import config_exists, get_resolved_config
@@ -1559,6 +1699,10 @@ def cmd_rom(args: argparse.Namespace) -> int:
         else:
             all_roms = scan_all_systems(rom_path)
 
+        # Folder the ROMs came from. Flatpak grants are scoped to exactly this.
+        scan_root = rom_path / args.system if (
+            args.system and args.system != 'psvita') else rom_path
+
         if not all_roms:
             print("No ROMs found to import.")
             return 0
@@ -1573,6 +1717,8 @@ def cmd_rom(args: argparse.Namespace) -> int:
                 print(f"\n  {sys_def.fullname if sys_def else system}:")
                 for rom in roms:
                     print(f"    {rom.steam_title}")
+            _report_flatpak_permissions(_flatpak_apps_for_systems(all_roms),
+                                        scan_root, dry_run=True)
             return 0
 
         # Build shortcuts
@@ -1795,6 +1941,8 @@ def cmd_rom(args: argparse.Namespace) -> int:
         elif not config.get('api_key'):
             print("\n  Skipping artwork (no API key configured)")
             print("  Run 'sgm config set api_key YOUR_KEY' to enable artwork downloads")
+
+        _report_flatpak_permissions(_flatpak_apps_for_systems(all_roms), scan_root)
 
         notify_steam_reload()
         return 0
@@ -3433,6 +3581,25 @@ def main() -> int:
     rom_collections.add_argument(
         '--dry-run', action='store_true',
         help='Show what would be written without making changes')
+
+    rom_permissions = rom_sub.add_parser(
+        'permissions',
+        help='Audit flatpak emulator access to ROM folders',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            'Flatpak emulators run sandboxed and cannot reach ROMs unless the\n'
+            'folder is granted to them. Read-only is not enough: emulators\n'
+            'such as PCSX2 write a cache beside the disc image and will not\n'
+            'boot without it.\n\n'
+            'examples:\n'
+            '  sgm rom permissions ~/Roms           audit\n'
+            '  sgm rom permissions ~/Roms --fix     grant what is missing'))
+    rom_permissions.add_argument(
+        'paths', nargs='+', help='ROM folders to check')
+    rom_permissions.add_argument(
+        '--fix', action='store_true',
+        help='Grant the missing access instead of only reporting it')
+    rom_permissions.set_defaults(func=cmd_rom_permissions)
 
     # collections
     sub_collections = subparsers.add_parser(
