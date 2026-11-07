@@ -404,7 +404,7 @@
       "release_year": 1994,
       "default_emulator": "retroarch/mednafen_saturn",
       "extensions": [".bin", ".iso", ".cue", ".m3u", ".zip", ".7z"],
-      "screenscraper_id": 24,
+      "screenscraper_id": 22,
       "thegamesdb_id": "17",
       "steam_category": "Saturn"
     },
@@ -415,7 +415,7 @@
       "release_year": 1994,
       "default_emulator": "retroarch/mednafen_psx_hw",
       "extensions": [".bin", ".cue", ".iso", ".img", ".pbp", ".zip", ".7z"],
-      "screenscraper_id": 7,
+      "screenscraper_id": 57,
       "thegamesdb_id": "10",
       "steam_category": "PSX",
       "legacy_tags": ["PlayStation"]
@@ -427,7 +427,7 @@
       "release_year": 2000,
       "default_emulator": "pcsx2",
       "extensions": [".iso", ".bin", ".cue", ".m3u", ".zip", ".7z"],
-      "screenscraper_id": 17,
+      "screenscraper_id": 58,
       "thegamesdb_id": "1",
       "steam_category": "PS2",
       "legacy_tags": ["PlayStation 2"]
@@ -439,7 +439,7 @@
       "release_year": 2004,
       "default_emulator": "ppsspp",
       "extensions": [".iso", ".pbp", ".cso", ".zip", ".7z"],
-      "screenscraper_id": 19,
+      "screenscraper_id": 61,
       "thegamesdb_id": "13",
       "steam_category": "PSP",
       "legacy_tags": ["PlayStation Portable"]
@@ -451,7 +451,7 @@
       "release_year": 2011,
       "default_emulator": "vita3k",
       "scan_as_dirs": true,
-      "screenscraper_id": 0,
+      "screenscraper_id": 62,
       "thegamesdb_id": "19",
       "steam_category": "Vita",
       "legacy_tags": ["PlayStation Vita", "PS Vita"]
@@ -463,7 +463,7 @@
       "release_year": 1977,
       "default_emulator": "retroarch/stella",
       "extensions": [".a26", ".bin", ".zip", ".7z"],
-      "screenscraper_id": 5,
+      "screenscraper_id": 26,
       "thegamesdb_id": "22",
       "steam_category": "Atari2600",
       "legacy_tags": ["Atari 2600"]
@@ -475,7 +475,7 @@
       "release_year": 1982,
       "default_emulator": "retroarch/atari800",
       "extensions": [".a52", ".bin", ".zip", ".7z"],
-      "screenscraper_id": 6,
+      "screenscraper_id": 40,
       "thegamesdb_id": "23",
       "steam_category": "Atari5200",
       "legacy_tags": ["Atari 5200"]
@@ -487,7 +487,7 @@
       "release_year": 1986,
       "default_emulator": "retroarch/prosystem",
       "extensions": [".a78", ".bin", ".zip", ".7z"],
-      "screenscraper_id": 22,
+      "screenscraper_id": 41,
       "thegamesdb_id": "37",
       "steam_category": "Atari7800",
       "legacy_tags": ["Atari 7800"]
@@ -499,7 +499,7 @@
       "release_year": 1989,
       "default_emulator": "retroarch/mednafen_lynx",
       "extensions": [".lnx", ".zip", ".7z"],
-      "screenscraper_id": 11,
+      "screenscraper_id": 28,
       "thegamesdb_id": "21",
       "steam_category": "Lynx",
       "legacy_tags": ["Atari Lynx"]
@@ -511,7 +511,7 @@
       "release_year": 1982,
       "default_emulator": "retroarch/vice_x64sc",
       "extensions": [".d64", ".t64", ".x64", ".prg", ".p00", ".crt", ".zip", ".7z"],
-      "screenscraper_id": 25,
+      "screenscraper_id": 66,
       "thegamesdb_id": "0",
       "steam_category": "C64",
       "legacy_tags": ["Commodore 64"]
@@ -523,7 +523,7 @@
       "release_year": 1980,
       "default_emulator": "retroarch/vice_xvic",
       "extensions": [".d64", ".t64", ".prg", ".p00", ".crt", ".zip", ".7z"],
-      "screenscraper_id": 26,
+      "screenscraper_id": 73,
       "thegamesdb_id": "0",
       "steam_category": "VIC20",
       "legacy_tags": ["VIC-20"]
@@ -535,7 +535,7 @@
       "release_year": 1985,
       "default_emulator": "retroarch/puae",
       "extensions": [".adf", ".hdf", ".lha", ".zip", ".7z"],
-      "screenscraper_id": 27,
+      "screenscraper_id": 64,
       "thegamesdb_id": "0",
       "steam_category": "Amiga"
     },
@@ -546,7 +546,7 @@
       "release_year": 1982,
       "default_emulator": "retroarch/gearcoleco",
       "extensions": [".col", ".rom", ".zip", ".7z"],
-      "screenscraper_id": 28,
+      "screenscraper_id": 48,
       "thegamesdb_id": "0",
       "steam_category": "ColecoVision"
     },
@@ -557,7 +557,7 @@
       "release_year": 1979,
       "default_emulator": "retroarch/freeintv",
       "extensions": [".int", ".bin", ".zip", ".7z"],
-      "screenscraper_id": 29,
+      "screenscraper_id": 115,
       "thegamesdb_id": "24",
       "steam_category": "Intellivision"
     },
@@ -568,7 +568,7 @@
       "release_year": 1990,
       "default_emulator": "retroarch/fbneo",
       "extensions": [".neo", ".zip", ".7z"],
-      "screenscraper_id": 30,
+      "screenscraper_id": 142,
       "thegamesdb_id": "0",
       "steam_category": "NeoGeo",
       "legacy_tags": ["Neo Geo"]
@@ -580,7 +580,7 @@
       "release_year": 0,
       "default_emulator": "mame",
       "extensions": [".zip", ".7z"],
-      "screenscraper_id": 31,
+      "screenscraper_id": 0,
       "thegamesdb_id": "0",
       "steam_category": "Arcade"
     },
@@ -591,7 +591,7 @@
       "release_year": 1981,
       "default_emulator": "retroarch/dosbox_pure",
       "extensions": [".dos", ".pc", ".zip", ".7z"],
-      "screenscraper_id": 16,
+      "screenscraper_id": 135,
       "thegamesdb_id": "0",
       "steam_category": "PC",
       "legacy_tags": ["DOS"]
@@ -603,7 +603,7 @@
       "release_year": 1980,
       "default_emulator": "retroarch/81",
       "extensions": [".dat", ".z1", ".z2", ".z3", ".z4", ".z5", ".z6", ".z7", ".z8", ".zip", ".7z"],
-      "screenscraper_id": 0,
+      "screenscraper_id": 215,
       "thegamesdb_id": "0",
       "steam_category": "Infocom",
       "aliases": ["zmachine"],
